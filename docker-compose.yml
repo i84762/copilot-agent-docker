@@ -1,0 +1,64 @@
+version: "3.9"
+
+services:
+  copilot-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: copilot-agent:latest
+    container_name: copilot-agent
+
+    # Allocate a real TTY so Copilot CLI can render its UI
+    stdin_open: true
+    tty: true
+
+    environment:
+      # ── Required ────────────────────────────────────────────
+      - GH_TOKEN=${GH_TOKEN}               # GitHub PAT with Copilot + repo perms
+
+      # ── Git identity (optional but recommended) ──────────────
+      - GIT_USER_NAME=${GIT_USER_NAME:-Copilot Agent}
+      - GIT_USER_EMAIL=${GIT_USER_EMAIL:-copilot@example.com}
+
+      # ── Task resolution (pick ONE method) ────────────────────
+      # Method A: inline task string
+      - COPILOT_TASK=${COPILOT_TASK:-}
+      # Method B: path to a file inside the mounted project
+      - COPILOT_TASK_FILE=${COPILOT_TASK_FILE:-}
+
+      # ── Global instructions (from your GitHub repo) ──────────
+      # Format: "owner/repo"  e.g. "acme/copilot-instructions"
+      - COPILOT_INSTRUCTIONS_REPO=${COPILOT_INSTRUCTIONS_REPO:-}
+      # Path inside that repo (default: copilot-instructions.md)
+      - COPILOT_INSTRUCTIONS_FILE=${COPILOT_INSTRUCTIONS_FILE:-copilot-instructions.md}
+      # Branch to read from (default: main)
+      - COPILOT_INSTRUCTIONS_BRANCH=${COPILOT_INSTRUCTIONS_BRANCH:-main}
+
+      # ── SDK version overrides (optional) ─────────────────────
+      - FLUTTER_VERSION=${FLUTTER_VERSION:-3.24.5}
+      - GO_VERSION=${GO_VERSION:-1.22.5}
+
+      # ── Firebase Test Lab (optional) ─────────────────────────
+      # Your Firebase / GCP project ID
+      - FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID:-}
+      # Option A: path to service account JSON key file (mounted below)
+      - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS:-}
+      # Option B: full JSON key contents as a string
+      - GOOGLE_CREDENTIALS_JSON=${GOOGLE_CREDENTIALS_JSON:-}
+      # Target device (gcloud device spec)
+      - FIREBASE_TEST_DEVICE=${FIREBASE_TEST_DEVICE:-model=oriole,version=33,locale=en,orientation=portrait}
+      # Per-test timeout
+      - FIREBASE_TEST_TIMEOUT=${FIREBASE_TEST_TIMEOUT:-5m}
+
+    volumes:
+      # Your project folder → /workspace inside the container
+      - ${PROJECT_PATH}:/workspace
+
+      # SDK cache — survives container restarts (avoids re-downloading)
+      - copilot_sdk_cache:/sdks
+
+      # Service account key file (only mounted when GCLOUD_KEY_FILE is set)
+      - ${GCLOUD_KEY_FILE:-/dev/null}:/keys/sa-key.json:ro
+
+volumes:
+  copilot_sdk_cache:
