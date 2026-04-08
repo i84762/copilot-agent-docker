@@ -146,6 +146,31 @@ function connectWS() {
         term.writeln(`\r\n\x1b[31m[error] ${msg.message}\x1b[0m\r\n`);
         toast(msg.message, 'error');
         break;
+
+      case 'dev_log':
+        appendDevLog(msg.text);
+        break;
+
+      case 'dev_log_status':
+        setDevMode(msg.enabled);
+        break;
+
+      case 'progress': {
+        // Show/update launch progress overlay
+        showLaunchProgress(true);
+        setProgressStep(msg.step, msg.text, msg.status);
+        break;
+      }
+
+      case 'progress_done':
+        // Keep panel visible briefly then hide as logs stream in
+        setTimeout(() => showLaunchProgress(false), 800);
+        break;
+
+      case 'progress_error':
+        setProgressTitle('Failed', 'error');
+        // Leave panel visible so user can read the step that failed
+        break;
     }
   };
 }
@@ -258,6 +283,31 @@ function checkSetupHint() {
   } else {
     $('setupHint').classList.add('hidden');
   }
+  updateCredentialsBadge();
+}
+
+// Show a "✓ configured" or "⚠ not set" badge on the credentials summary
+function updateCredentialsBadge() {
+  const hint = $('credentialsHint');
+  if (!hint) return;
+  // Don't overwrite an error hint
+  if (hint.textContent.startsWith('⚠ ') && hint.textContent.includes('required')) return;
+
+  const agent = $('agent')?.value || 'copilot';
+  const keyMap = {
+    copilot: 'ghToken',
+    claude:  'anthropicApiKey',
+    gemini:  'geminiApiKey',
+    aider:   'openaiApiKey',
+  };
+  const keyId = keyMap[agent];
+  const hasKey = keyId && $(keyId) && $(keyId).value.trim().length > 0;
+  if (hasKey) {
+    hint.textContent = '✓ configured';
+    hint.style.color = 'var(--green)';
+  } else {
+    hint.textContent = '';
+  }
 }
 
 // ── Inline field validation ───────────────────────────────────────────────────
@@ -275,6 +325,23 @@ function setFieldError(inputId, msg) {
     }
     errEl.textContent = msg;
     errEl.classList.add('visible');
+
+    // Auto-expand any <details> ancestor and scroll field into view
+    let node = el.parentNode;
+    while (node && node !== document.body) {
+      if (node.tagName === 'DETAILS') {
+        node.open = true;
+        // Pulse the summary to draw attention
+        const sum = node.querySelector('summary');
+        if (sum) {
+          sum.classList.remove('cg-error-pulse');
+          void sum.offsetWidth; // reflow to restart animation
+          sum.classList.add('cg-error-pulse');
+        }
+      }
+      node = node.parentNode;
+    }
+    setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50);
   } else {
     el.classList.remove('field-invalid');
     const errEl = el.parentNode.querySelector('.field-error-msg');
@@ -285,6 +352,11 @@ function setFieldError(inputId, msg) {
 function clearFieldErrors() {
   document.querySelectorAll('.field-invalid').forEach(el => el.classList.remove('field-invalid'));
   document.querySelectorAll('.field-error-msg.visible').forEach(el => el.classList.remove('visible'));
+  document.querySelectorAll('.cg-error-pulse').forEach(el => el.classList.remove('cg-error-pulse'));
+  // Reset credentials hint (re-evaluate configured state)
+  const hint = $('credentialsHint');
+  if (hint) { hint.textContent = ''; hint.style.color = ''; }
+  updateCredentialsBadge();
 }
 
 ['projectPath','ghToken','anthropicApiKey','geminiApiKey'].forEach(id => {
@@ -330,70 +402,128 @@ function validateConfig() {
   clearFieldErrors();
   const cfg = getConfig();
   let valid = true;
+
+  function credHint(msg) {
+    const hint = $('credentialsHint');
+    if (hint) hint.textContent = '⚠ ' + msg;
+  }
+
   if (!cfg.projectPath) {
     setFieldError('projectPath', 'Project path is required');
-    toast('Project Path is required', 'error');
     valid = false;
   }
   if (cfg.agent === 'copilot' && !cfg.ghToken) {
+    credHint('GitHub Token required');
     setFieldError('ghToken', 'GitHub Token is required for Copilot agent');
-    toast('GitHub Token is required for Copilot agent', 'error');
     valid = false;
   }
   if (cfg.agent === 'claude' && !cfg.anthropicApiKey) {
+    credHint('Anthropic API Key required');
     setFieldError('anthropicApiKey', 'Anthropic API Key is required for Claude agent');
-    toast('Anthropic API Key is required', 'error');
     valid = false;
   }
   if (cfg.agent === 'gemini' && !cfg.geminiApiKey) {
+    credHint('Gemini API Key required');
     setFieldError('geminiApiKey', 'Gemini API Key is required for Gemini agent');
-    toast('Gemini API Key is required', 'error');
     valid = false;
   }
   if (cfg.agent === 'aider' && !cfg.anthropicApiKey && !cfg.openaiApiKey && !cfg.geminiApiKey) {
-    toast('At least one API key is required for Aider', 'error');
+    credHint('At least one API key required');
+    const sec = $('credentialsSection');
+    if (sec) {
+      sec.open = true;
+      const sum = sec.querySelector('summary');
+      if (sum) { sum.classList.remove('cg-error-pulse'); void sum.offsetWidth; sum.classList.add('cg-error-pulse'); }
+      setTimeout(() => sec.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+    }
     valid = false;
   }
   return valid ? cfg : null;
 }
 
-// ── Persistence (localStorage) ────────────────────────────────────────────────
+// ── Persistence ───────────────────────────────────────────────────────────────
+// Global fields (tokens, keys, instructions, defaults) → server-side config file
+//   Persists across browsers, survives page reload, shared with remote clients.
+// Session fields (project path, task) → localStorage only (per-browser).
 
-const STORAGE_KEY = 'copilot-agent-ui-config';
+const STORAGE_KEY = 'copilot-agent-ui-session';
 
-const FORM_FIELDS = [
-  'agent','projectPath','ghToken','anthropicApiKey','geminiApiKey',
-  'openaiApiKey','anthropicApiKey2','geminiApiKey2','aiderModel',
-  'task','taskFile',
+// Fields saved server-side (shared across all clients)
+const GLOBAL_FIELDS = [
+  'agent',
+  'ghToken','anthropicApiKey','geminiApiKey','openaiApiKey',
+  'anthropicApiKey2','geminiApiKey2','aiderModel',
   'instructionsRepo','instructionsFile','instructionsBranch',
   'gitUserName','gitUserEmail','flutterVersion','goVersion',
   'firebaseProjectId','gcloudKeyFile','firebaseTestDevice',
 ];
+const GLOBAL_CHECKBOXES = ['useHostInstructions'];
 
-function saveForm() {
+// Fields saved in localStorage (per-browser session)
+const SESSION_FIELDS = ['sessionName','projectPath','task','taskFile'];
+
+let _saveGlobalTimer = null;
+function saveGlobalConfig() {
+  // Debounce — only write after 800 ms of quiet
+  clearTimeout(_saveGlobalTimer);
+  _saveGlobalTimer = setTimeout(() => {
+    const data = {};
+    GLOBAL_FIELDS.forEach(id => {
+      const el = $(id); if (el) data[id] = el.value;
+    });
+    GLOBAL_CHECKBOXES.forEach(id => {
+      const el = $(id); if (el) data[id] = el.checked;
+    });
+    fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    }).catch(() => {});
+  }, 800);
+}
+
+function saveSessionConfig() {
   const data = {};
-  FORM_FIELDS.forEach(id => {
-    const el = $(id);
-    if (!el) return;
-    data[id] = el.type === 'checkbox' ? el.checked : el.value;
+  SESSION_FIELDS.forEach(id => {
+    const el = $(id); if (el) data[id] = el.value;
   });
-  data.useHostInstructions = $('useHostInstructions').checked;
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch (_) {}
 }
 
-function loadForm() {
+function saveForm() {
+  saveGlobalConfig();
+  saveSessionConfig();
+}
+
+function applyConfig(data) {
+  if (!data) return;
+  GLOBAL_FIELDS.forEach(id => {
+    const el = $(id);
+    if (el && id in data) el.value = data[id];
+  });
+  GLOBAL_CHECKBOXES.forEach(id => {
+    const el = $(id);
+    if (el && id in data) el.checked = data[id];
+  });
+}
+
+function applySession(data) {
+  if (!data) return;
+  SESSION_FIELDS.forEach(id => {
+    const el = $(id);
+    if (el && id in data) el.value = data[id];
+  });
+}
+
+// loadForm: fetches server config first, then overlays localStorage session data
+async function loadForm() {
+  try {
+    const res = await fetch('/api/config');
+    if (res.ok) applyConfig(await res.json());
+  } catch (_) {}
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return;
-    const data = JSON.parse(raw);
-    FORM_FIELDS.forEach(id => {
-      const el = $(id);
-      if (!el || !(id in data)) return;
-      el.value = data[id];
-    });
-    if ('useHostInstructions' in data) {
-      $('useHostInstructions').checked = data.useHostInstructions;
-    }
+    if (raw) applySession(JSON.parse(raw));
   } catch (_) {}
 }
 
@@ -426,7 +556,11 @@ function renderContainerList(containers) {
     const opt  = document.createElement('option');
     opt.value  = c.id;
     opt.dataset.agent = c.agent || 'copilot';
-    opt.textContent = `${c.name}  [${c.mode}]  ${c.project}`;
+    // Show: "My Feature  ·  [plan]  office-app" or "copilot-agent-17…  ·  [normal]  …"
+    const label = c.sessionName
+      ? `${c.sessionName}  ·  [${c.mode}]  ${c.project}`
+      : `${c.shortId}  ·  [${c.mode}]  ${c.project}`;
+    opt.textContent = label;
     sel.appendChild(opt);
   });
 
@@ -445,12 +579,15 @@ function showContainerInfo(c) {
   const stateClass = c.state === 'running' ? 'ci-running' : 'ci-exited';
   const modeClass  = c.mode === 'plan' ? 'ci-plan' : '';
   const agentInfo  = AGENT_INFO[c.agent] || { name: c.agent || 'copilot' };
+  const nameHtml   = c.sessionName
+    ? `<span class="ci-session-name">${c.sessionName}</span> <span class="ci-docker-id">${c.shortId}</span>`
+    : `<span class="ci-name">${c.shortId}</span>`;
   $('containerInfo').innerHTML =
-    `<span class="ci-name">${c.name}</span>  ` +
+    `${nameHtml}  ` +
     `<span class="ci-badge ${stateClass}">${c.state}</span>  ` +
     (c.mode !== 'normal' ? `<span class="ci-badge ${modeClass}">${c.mode}</span>  ` : '') +
     `<span class="ci-badge" style="background:var(--surface);border:1px solid var(--border)">${agentInfo.name}</span>` +
-    `<br>${c.status}`;
+    `<br><span class="ci-status-text">${c.status}</span>`;
   $('containerInfo').classList.remove('hidden');
 
   // Sync agent dropdown to match this container's agent
@@ -567,6 +704,106 @@ $('downloadLogsBtn').addEventListener('click', () => {
 function clearTerminal(resetBuffer = true) {
   term.clear();
   if (resetBuffer) logBuffer = '';
+}
+
+// ── Dev logs panel ────────────────────────────────────────────────────────────
+
+let devLogsEnabled = false;
+let devLogBuffer   = '';
+
+function setDevMode(enabled) {
+  devLogsEnabled = enabled;
+  const btn   = $('devLogsBtn');
+  const panel = $('devLogPanel');
+  if (enabled) {
+    btn.classList.add('btn-active');
+    btn.textContent = '🔍 Dev Logs ●';
+    panel.classList.remove('hidden');
+  } else {
+    btn.classList.remove('btn-active');
+    btn.textContent = '🔍 Dev Logs';
+    panel.classList.add('hidden');
+  }
+}
+
+function appendDevLog(text) {
+  const el  = $('devLogContent');
+  if (!el) return;
+  const ts  = new Date().toISOString().slice(11, 23); // HH:MM:SS.mmm
+  const line = `[${ts}] ${text}\n`;
+  devLogBuffer += line;
+  el.textContent += line;
+  // Autoscroll to bottom
+  el.parentElement.scrollTop = el.parentElement.scrollHeight;
+}
+
+$('devLogsBtn').addEventListener('click', () => {
+  const next = !devLogsEnabled;
+  wsSend({ type: 'toggle_dev_logs', enabled: next });
+  // Optimistic toggle — server confirms with dev_log_status
+  setDevMode(next);
+  if (next) toast('Dev logs enabled', 'info');
+});
+
+$('clearDevLogsBtn').addEventListener('click', () => {
+  devLogBuffer = '';
+  const el = $('devLogContent');
+  if (el) el.textContent = '';
+});
+
+// ── Launch progress panel ─────────────────────────────────────────────────────
+
+const STEP_LABELS = {
+  validate: 'Validating configuration',
+  docker:   'Connecting to Docker',
+  image:    'Checking agent image',
+  create:   'Creating container',
+  attach:   'Attaching log stream',
+};
+
+function showLaunchProgress(visible) {
+  const panel = $('launchProgress');
+  if (!panel) return;
+  if (visible) {
+    panel.classList.remove('hidden');
+    if (!$('lpSteps').children.length) {
+      // Pre-populate all steps as pending
+      Object.entries(STEP_LABELS).forEach(([id, label]) => {
+        const li = document.createElement('li');
+        li.className = 'lp-step pending';
+        li.id = `lp-${id}`;
+        li.innerHTML = `<span class="lp-icon"></span><span class="lp-text">${label}</span>`;
+        $('lpSteps').appendChild(li);
+      });
+    }
+  } else {
+    panel.classList.add('hidden');
+    $('lpSteps').innerHTML = '';
+    setProgressTitle('Launching…', '');
+  }
+}
+
+function setProgressStep(id, text, status) {
+  // Ensure panel is open and pre-populated
+  showLaunchProgress(true);
+  let li = $(`lp-${id}`);
+  if (!li) {
+    li = document.createElement('li');
+    li.id = `lp-${id}`;
+    $('lpSteps').appendChild(li);
+  }
+  li.className = `lp-step ${status}`;
+  li.innerHTML = `<span class="lp-icon"></span><span class="lp-text">${text}</span>`;
+  // Update title to show current active step
+  if (status === 'active') setProgressTitle(text, '');
+  if (status === 'ok' && id === 'attach') setProgressTitle('Agent starting…', '');
+}
+
+function setProgressTitle(text, state) {
+  const el = $('lpTitle');
+  if (!el) return;
+  el.textContent = text;
+  el.className = `lp-title${state ? ' ' + state : ''}`;
 }
 
 // ── Docker status ─────────────────────────────────────────────────────────────
@@ -727,15 +964,17 @@ $('refreshContainersBtn').addEventListener('click', () => {
 });
 
 $('clearFormBtn').addEventListener('click', () => {
-  if (!confirm('Clear saved form values?')) return;
+  if (!confirm('Clear all saved settings (tokens, keys, instructions)?')) return;
   try { localStorage.removeItem(STORAGE_KEY); } catch (_) {}
-  FORM_FIELDS.forEach(id => { const el = $(id); if (el) el.value = ''; });
+  fetch('/api/config', { method: 'DELETE' }).catch(() => {});
+  [...GLOBAL_FIELDS, ...SESSION_FIELDS].forEach(id => { const el = $(id); if (el) el.value = ''; });
+  GLOBAL_CHECKBOXES.forEach(id => { const el = $(id); if (el) el.checked = false; });
   $('useHostInstructions').checked = true;
   $('agent').value = 'copilot';
   updateAgentFields('copilot');
   clearFieldErrors();
   checkSetupHint();
-  toast('Form cleared', 'info');
+  toast('All saved settings cleared', 'info');
 });
 
 // ── Agent selector: show/hide per-agent fields + card ─────────────────────────
@@ -749,6 +988,7 @@ function updateAgentFields(agent) {
 $('agent').addEventListener('change', () => {
   updateAgentFields($('agent').value);
   saveForm();
+  updateCredentialsBadge();
 });
 
 // ── Switch Agent button ────────────────────────────────────────────────────────
@@ -896,12 +1136,14 @@ if (isElectron) {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 
-loadForm();
-checkSetupHint();
-updateAgentFields($('agent').value);
-updateButtons();
-updateTerminalTitle();
-connectWS();
+(async () => {
+  await loadForm();                          // fetch server config + localStorage
+  checkSetupHint();
+  updateAgentFields($('agent').value);       // show/hide fields based on saved agent
+  updateButtons();
+  updateTerminalTitle();
+  connectWS();
 
-// Periodic container list refresh
-setInterval(listContainers, 10000);
+  // Periodic container list refresh
+  setInterval(listContainers, 10000);
+})();

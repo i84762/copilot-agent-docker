@@ -40,8 +40,9 @@ RUN curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
     && rm -rf /var/lib/apt/lists/*
 
 # Install fastlane for Play Store / App Store delivery
+# --force is needed because aider-chat installs a `dotenv` binary that conflicts
 RUN apt-get update && apt-get install -y --no-install-recommends ruby ruby-dev \
-    && gem install fastlane --quiet --no-document \
+    && gem install fastlane --quiet --no-document --force \
     && rm -rf /var/lib/apt/lists/*
 
 # Cache directory for SDKs (can be mounted as a volume)

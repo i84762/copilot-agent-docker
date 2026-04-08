@@ -55,6 +55,29 @@ function makeDockerFromConfig(cfg) {
 let dockerCfg = { type: 'local' };
 let docker    = makeLocalDocker();
 
+// ── Server-side config persistence ────────────────────────────────────────────
+// Stored in <user-home>/.copilot-agent-ui/config.json so it survives restarts
+// and is shared across all browser clients (including remote Tailscale/SSH ones).
+
+const CONFIG_DIR  = path.join(os.homedir(), '.copilot-agent-ui');
+const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
+
+function readServerConfig() {
+  try {
+    if (!fs.existsSync(CONFIG_FILE)) return {};
+    return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+  } catch (_) { return {}; }
+}
+
+function writeServerConfig(data) {
+  try {
+    if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(data, null, 2), 'utf8');
+  } catch (err) {
+    console.error('[config] write failed:', err.message);
+  }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function safeSend(ws, obj) {
@@ -133,11 +156,16 @@ function buildBinds(cfg) {
 }
 
 async function createAndStart(cfg, mode) {
-  const name        = `copilot-agent-${Date.now()}`;
+  // Build a unique Docker container name: user-slug + timestamp
+  const slug = (cfg.sessionName || '')
+    .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+  const uniquePart = Date.now();
+  const dockerName = slug ? `copilot-${slug}-${uniquePart}` : `copilot-agent-${uniquePart}`;
+
   const interactive = mode === 'plan';
 
   const container = await docker.createContainer({
-    name,
+    name: dockerName,
     Image:        'copilot-agent:latest',
     AttachStdin:  interactive,
     AttachStdout: true,
@@ -151,10 +179,11 @@ async function createAndStart(cfg, mode) {
       AutoRemove: false,
     },
     Labels: {
-      'copilot-agent':      'true',
-      'copilot-mode':       mode,
-      'copilot-project':    cfg.projectPath ? path.basename(cfg.projectPath) : 'unknown',
-      'copilot-agent-type': cfg.agent || 'copilot',
+      'copilot-agent':        'true',
+      'copilot-mode':         mode,
+      'copilot-project':      cfg.projectPath ? path.basename(cfg.projectPath) : 'unknown',
+      'copilot-agent-type':   cfg.agent || 'copilot',
+      'copilot-session-name': cfg.sessionName || '',
     },
   });
 
@@ -163,20 +192,41 @@ async function createAndStart(cfg, mode) {
 }
 
 function containerSummary(c) {
+  const sessionName = c.Labels?.['copilot-session-name'] || '';
+  const dockerName  = (c.Names[0] || c.Id).replace(/^\//, '');
   return {
-    id:      c.Id,
-    shortId: c.Id.slice(0, 12),
-    name:    (c.Names[0] || c.Id).replace(/^\//, ''),
-    status:  c.Status,
-    state:   c.State,
-    mode:    c.Labels?.['copilot-mode']    || 'normal',
-    project: c.Labels?.['copilot-project'] || '—',
-    agent:   c.Labels?.['copilot-agent-type'] || 'copilot',
-    image:   c.Image,
+    id:          c.Id,
+    shortId:     c.Id.slice(0, 12),
+    name:        dockerName,
+    sessionName: sessionName,
+    displayName: sessionName || dockerName,   // what the UI shows
+    status:      c.Status,
+    state:       c.State,
+    mode:        c.Labels?.['copilot-mode']    || 'normal',
+    project:     c.Labels?.['copilot-project'] || '—',
+    agent:       c.Labels?.['copilot-agent-type'] || 'copilot',
+    image:       c.Image,
   };
 }
 
 // ── REST API ──────────────────────────────────────────────────────────────────
+
+// Global config — read/write persisted settings (tokens, instructions, defaults)
+app.get('/api/config', (_req, res) => {
+  res.json(readServerConfig());
+});
+
+app.post('/api/config', (req, res) => {
+  const current = readServerConfig();
+  const updated = Object.assign(current, req.body);   // merge, never wipe
+  writeServerConfig(updated);
+  res.json({ ok: true });
+});
+
+app.delete('/api/config', (_req, res) => {
+  try { if (fs.existsSync(CONFIG_FILE)) fs.unlinkSync(CONFIG_FILE); } catch (_) {}
+  res.json({ ok: true });
+});
 
 app.get('/api/docker/status', async (_req, res) => {
   try {
@@ -273,6 +323,12 @@ wss.on('connection', ws => {
   let logStream       = null;
   let containerStream = null; // plan mode interactive stream
   let activeId        = null;
+  let devMode         = false; // verbose dev logging enabled
+
+  function devLog(text) {
+    if (!devMode) return;
+    safeSend(ws, { type: 'dev_log', text });
+  }
 
   function cleanup() {
     if (logStream)       { try { logStream.destroy();       } catch (_) {} logStream       = null; }
@@ -294,9 +350,25 @@ wss.on('connection', ws => {
       case 'subscribe_logs': {
         cleanup();
         activeId = msg.containerId;
+        devLog(`[subscribe_logs] containerId=${activeId} devMode=${devMode}`);
         try {
           const c = docker.getContainer(activeId);
-          logStream = await c.logs({ stdout: true, stderr: true, follow: true, tail: 300, timestamps: false });
+
+          if (devMode) {
+            // In dev mode, emit container inspect info first
+            try {
+              const info = await c.inspect();
+              devLog(`[inspect] name=${info.Name} image=${info.Config?.Image} status=${info.State?.Status}`);
+              devLog(`[inspect] created=${info.Created} started=${info.State?.StartedAt}`);
+              devLog(`[inspect] mounts=${JSON.stringify(info.Mounts?.map(m => `${m.Source}→${m.Destination}`))}`);
+              const envLines = (info.Config?.Env || [])
+                .map(e => e.startsWith('GH_TOKEN') || e.includes('API_KEY') || e.includes('KEY=')
+                  ? e.replace(/=(.{4}).*/, '=****') : e);
+              devLog(`[inspect] env=\n  ${envLines.join('\n  ')}`);
+            } catch (e) { devLog(`[inspect] failed: ${e.message}`); }
+          }
+
+          logStream = await c.logs({ stdout: true, stderr: true, follow: true, tail: 300, timestamps: devMode });
 
           logStream.on('data', chunk => {
             const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
@@ -313,21 +385,70 @@ wss.on('connection', ws => {
       // ── Start container — normal / resume / new-session ───────────────────
       case 'start_container': {
         cleanup();
-        try {
-          const container = await createAndStart(msg.config, msg.mode || 'normal');
-          activeId = container.id;
-          safeSend(ws, { type: 'container_started', containerId: container.id, mode: msg.mode });
+        const mode = msg.mode || 'normal';
+        const modeLabel = mode === 'resume' ? 'Resume' : mode === 'new' ? 'New Session' : 'Start';
 
-          logStream = await container.logs({ stdout: true, stderr: true, follow: true, tail: 0, timestamps: false });
+        function step(id, text, status) {
+          safeSend(ws, { type: 'progress', step: id, text, status });
+        }
+
+        try {
+          step('validate',  'Validating configuration',    'ok');
+          devLog(`[start] mode=${mode} agent=${msg.config?.agent} project=${msg.config?.projectPath}`);
+
+          step('docker',    'Connecting to Docker',        'active');
+          const dockerInfo = await docker.ping();
+          step('docker',    'Docker connected',            'ok');
+          devLog(`[docker] ping ok — ${JSON.stringify(dockerInfo)}`);
+
+          step('image',     'Checking agent image',        'active');
+          try {
+            const imgInfo = await docker.getImage('copilot-agent:latest').inspect();
+            step('image',   'Image ready',                 'ok');
+            devLog(`[image] id=${imgInfo.Id.slice(7,19)} created=${imgInfo.Created} size=${(imgInfo.Size/1024/1024).toFixed(1)}MB`);
+          } catch {
+            throw new Error('Image copilot-agent:latest not found — build it first via "🔨 Build Image"');
+          }
+
+          step('create',    'Creating container',          'active');
+          devLog(`[create] building env + binds for mode=${mode}`);
+          const container = await createAndStart(msg.config, mode);
+          activeId = container.id;
+          step('create',    'Container created & started', 'ok');
+          devLog(`[create] containerId=${container.id}`);
+
+          if (devMode) {
+            try {
+              const info = await container.inspect();
+              devLog(`[inspect] name=${info.Name}`);
+              devLog(`[inspect] mounts=${JSON.stringify(info.Mounts?.map(m => `${m.Source}→${m.Destination}`))}`);
+              const envLines = (info.Config?.Env || [])
+                .map(e => e.startsWith('GH_TOKEN') || e.includes('API_KEY') || e.includes('KEY=')
+                  ? e.replace(/=(.{4}).*/, '=****') : e);
+              devLog(`[inspect] env:\n  ${envLines.join('\n  ')}`);
+            } catch (e) { devLog(`[inspect] ${e.message}`); }
+          }
+
+          step('attach',    'Attaching log stream',        'active');
+          logStream = await container.logs({ stdout: true, stderr: true, follow: true, tail: 0, timestamps: devMode });
+          step('attach',    'Log stream attached — agent starting', 'ok');
+          devLog(`[attach] streaming stdout+stderr timestamps=${devMode}`);
+
+          safeSend(ws, { type: 'progress_done' });
+          safeSend(ws, { type: 'container_started', containerId: container.id, mode });
+
           logStream.on('data', chunk => {
             safeSend(ws, { type: 'output', data: bufToB64(chunk) });
           });
           logStream.on('end', () => {
+            devLog(`[log_stream] ended for ${container.id}`);
             safeSend(ws, { type: 'output', data: toB64('\r\n\x1b[90m[container exited]\x1b[0m\r\n') });
             safeSend(ws, { type: 'container_stopped', containerId: container.id });
           });
         } catch (err) {
-          safeSend(ws, { type: 'error', message: `Start failed: ${err.message}` });
+          devLog(`[error] ${err.stack || err.message}`);
+          safeSend(ws, { type: 'progress_error', message: err.message });
+          safeSend(ws, { type: 'error', message: `${modeLabel} failed: ${err.message}` });
         }
         break;
       }
@@ -335,24 +456,52 @@ wss.on('connection', ws => {
       // ── Start container in plan mode — full interactive PTY ───────────────
       case 'plan_container': {
         cleanup();
+
+        function stepP(id, text, status) {
+          safeSend(ws, { type: 'progress', step: id, text, status });
+        }
+
         try {
+          stepP('validate', 'Validating configuration',    'ok');
+          devLog(`[plan] agent=${msg.config?.agent} project=${msg.config?.projectPath}`);
+
+          stepP('docker',   'Connecting to Docker',        'active');
+          await docker.ping();
+          stepP('docker',   'Docker connected',            'ok');
+
+          stepP('image',    'Checking agent image',        'active');
+          try { await docker.getImage('copilot-agent:latest').inspect(); }
+          catch { throw new Error('Image copilot-agent:latest not found — build it first via "🔨 Build Image"'); }
+          stepP('image',    'Image ready',                 'ok');
+
+          stepP('create',   'Creating container (plan mode)', 'active');
           const container = await createAndStart(msg.config, 'plan');
           activeId = container.id;
-          safeSend(ws, { type: 'container_started', containerId: container.id, mode: 'plan' });
+          stepP('create',   'Container ready',             'ok');
+          devLog(`[plan] containerId=${container.id}`);
 
+          stepP('attach',   'Attaching interactive PTY',   'active');
           containerStream = await container.attach({
             stream: true, stdin: true, stdout: true, stderr: true, hijack: true,
           });
+          stepP('attach',   'Interactive session ready',   'ok');
+          devLog(`[plan] PTY attached`);
+
+          safeSend(ws, { type: 'progress_done' });
+          safeSend(ws, { type: 'container_started', containerId: container.id, mode: 'plan' });
 
           containerStream.on('data', chunk => {
             safeSend(ws, { type: 'output', data: bufToB64(chunk) });
           });
           containerStream.on('end', () => {
+            devLog(`[plan] session ended for ${container.id}`);
             safeSend(ws, { type: 'output', data: toB64('\r\n\x1b[90m[planning session ended — click Execute Plan to run]\x1b[0m\r\n') });
             safeSend(ws, { type: 'container_stopped', containerId: container.id });
             safeSend(ws, { type: 'plan_complete' });
           });
         } catch (err) {
+          devLog(`[plan error] ${err.stack || err.message}`);
+          safeSend(ws, { type: 'progress_error', message: err.message });
           safeSend(ws, { type: 'error', message: `Plan start failed: ${err.message}` });
         }
         break;
@@ -414,6 +563,35 @@ wss.on('connection', ws => {
           safeSend(ws, { type: 'containers_list', containers: agents });
         } catch (err) {
           safeSend(ws, { type: 'error', message: err.message });
+        }
+        break;
+      }
+
+      // ── Toggle verbose dev logging ─────────────────────────────────────────
+      case 'toggle_dev_logs': {
+        devMode = !!msg.enabled;
+        safeSend(ws, { type: 'dev_log_status', enabled: devMode });
+
+        if (devMode) {
+          // Emit current state immediately so dev panel isn't blank
+          const ts = new Date().toISOString();
+          devLog(`[dev logs enabled] ${ts}`);
+          devLog(`[server] node ${process.version}  pid=${process.pid}`);
+          devLog(`[docker] config=${JSON.stringify(dockerCfg)}`);
+          if (activeId) {
+            devLog(`[active container] ${activeId}`);
+            try {
+              const info = await docker.getContainer(activeId).inspect();
+              devLog(`[inspect] name=${info.Name} state=${info.State?.Status}`);
+              devLog(`[inspect] started=${info.State?.StartedAt} pid=${info.State?.Pid}`);
+              const envLines = (info.Config?.Env || [])
+                .map(e => e.startsWith('GH_TOKEN') || e.includes('API_KEY') || e.includes('KEY=')
+                  ? e.replace(/=(.{4}).*/, '=****') : e);
+              devLog(`[inspect] env:\n  ${envLines.join('\n  ')}`);
+            } catch (e) { devLog(`[inspect] ${e.message}`); }
+          } else {
+            devLog('[active container] none');
+          }
         }
         break;
       }

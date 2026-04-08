@@ -62,88 +62,101 @@
       <div id="setupHint" class="setup-hint hidden">
         <strong>👋 Getting started</strong><br>
         1. Enter your <strong>Project Path</strong><br>
-        2. Pick an <strong>Agent</strong> and add its API key<br>
+        2. Pick an <strong>Agent</strong> and add its API key under <strong>🔑 Credentials</strong><br>
         3. Describe your <strong>Task</strong> or add a TASK.md to your project<br>
         4. Click <strong>▶ Start</strong> (or <strong>🗺 Plan</strong> to review first)
       </div>
 
-      <label class="field-label">Project Path <span class="required">*</span></label>
+      <!-- ── Session ── always visible ─────────────────────────────────────── -->
+      <label class="field-label">Session Name <span class="field-optional">(optional)</span></label>
+      <input id="sessionName" type="text" class="input-field" placeholder="e.g. login-flow, sprint-5-fixes">
+      <p class="field-help">A friendly name shown in the container list. Each run still gets a unique ID.</p>
+
+      <label class="field-label" style="margin-top:10px">Project Path <span class="required">*</span></label>
       <input id="projectPath" type="text" class="input-field" placeholder="D:\Code\my-project">
       <p class="field-help">Full path to your project folder on this machine. Docker will mount it as <code>/workspace</code>.</p>
 
-      <!-- Agent selector -->
-      <label class="field-label" style="margin-top:10px">Agent <span class="required">*</span></label>
-      <select id="agent" class="input-field">
-        <option value="copilot">GitHub Copilot CLI</option>
-        <option value="claude">Claude Code (Anthropic)</option>
-        <option value="gemini">Gemini CLI (Google)</option>
-        <option value="aider">Aider (multi-model)</option>
-      </select>
-
-      <!-- Agent info card -->
-      <div id="agentCard" class="agent-card"></div>
-
-      <!-- Copilot: GH Token -->
-      <div id="agentFields-copilot" class="agent-fields">
-        <label class="field-label">GitHub Token <span class="required">*</span></label>
-        <input id="ghToken" type="password" class="input-field" placeholder="ghp_…" autocomplete="off">
-        <p class="field-help">
-          Personal Access Token with <strong>Copilot</strong> + <strong>repo</strong> permissions.
-          <a href="https://github.com/settings/tokens/new?scopes=repo,copilot" target="_blank" class="help-link">Create token ↗</a>
-        </p>
-      </div>
-
-      <!-- Claude: Anthropic API Key -->
-      <div id="agentFields-claude" class="agent-fields" style="display:none">
-        <label class="field-label">Anthropic API Key <span class="required">*</span></label>
-        <input id="anthropicApiKey" type="password" class="input-field" placeholder="sk-ant-…" autocomplete="off">
-        <p class="field-help">
-          API key from Anthropic Console.
-          <a href="https://console.anthropic.com/settings/keys" target="_blank" class="help-link">Get key ↗</a>
-        </p>
-      </div>
-
-      <!-- Gemini: Google API Key -->
-      <div id="agentFields-gemini" class="agent-fields" style="display:none">
-        <label class="field-label">Gemini API Key <span class="required">*</span></label>
-        <input id="geminiApiKey" type="password" class="input-field" placeholder="AIza…" autocomplete="off">
-        <p class="field-help">
-          API key from Google AI Studio.
-          <a href="https://aistudio.google.com/app/apikey" target="_blank" class="help-link">Get key ↗</a>
-        </p>
-      </div>
-
-      <!-- Aider: flexible API key + model -->
-      <div id="agentFields-aider" class="agent-fields" style="display:none">
-        <p class="field-help" style="margin-top:2px">Provide at least one API key. Model is auto-detected.</p>
-        <label class="field-label">OpenAI API Key</label>
-        <input id="openaiApiKey" type="password" class="input-field" placeholder="sk-…" autocomplete="off">
-        <label class="field-label">Anthropic API Key</label>
-        <input id="anthropicApiKey2" type="password" class="input-field" placeholder="sk-ant-…" autocomplete="off">
-        <label class="field-label">Gemini API Key</label>
-        <input id="geminiApiKey2" type="password" class="input-field" placeholder="AIza…" autocomplete="off">
-        <label class="field-label">Model override <span class="field-optional">(optional)</span></label>
-        <input id="aiderModel" type="text" class="input-field" placeholder="gpt-4o · claude-3-5-sonnet-20241022 · gemini/gemini-1.5-pro">
-        <p class="field-help">
-          <a href="https://aider.chat/docs/llms.html" target="_blank" class="help-link">See all supported models ↗</a>
-        </p>
-      </div>
-
+      <!-- ── Task ── always visible ─────────────────────────────────────────── -->
       <label class="field-label" style="margin-top:10px">Task</label>
       <textarea id="task" class="input-field textarea" rows="3" placeholder="Describe what the agent should do…&#10;(or leave blank to read from TASK.md in project root)"></textarea>
       <p class="field-help">
-        Inline task description. Leave blank to auto-read from
-        <code>TASK.md</code>, <code>GOALS.md</code>, or <code>.copilot-task.md</code> in your project root.
+        Inline task. Leave blank to auto-read from
+        <code>TASK.md</code>, <code>GOALS.md</code>, or <code>.copilot-task.md</code> in project root.
       </p>
 
       <label class="field-label">Task File <span class="field-optional">(optional)</span></label>
       <input id="taskFile" type="text" class="input-field" placeholder="/workspace/SPRINT.md">
-      <p class="field-help">Container path to a task file, e.g. <code>/workspace/SPRINT.md</code>. Overrides the inline task above.</p>
+      <p class="field-help">Container path to a task file. Overrides the inline task above.</p>
 
-      <!-- Collapsible: Instructions -->
-      <details class="collapsible">
-        <summary>Instructions</summary>
-        <label class="field-label">Instructions Repo</label>
+      <!-- ── Credentials ── collapsed, auto-expands on validation error ──────── -->
+      <details id="credentialsSection" class="collapsible config-group">
+        <summary class="config-group-summary">
+          <span class="cg-icon">🔑</span> Agent &amp; Credentials
+          <span class="cg-hint" id="credentialsHint"></span>
+        </summary>
+
+        <label class="field-label" style="margin-top:8px">Agent <span class="required">*</span></label>
+        <select id="agent" class="input-field">
+          <option value="copilot">GitHub Copilot CLI</option>
+          <option value="claude">Claude Code (Anthropic)</option>
+          <option value="gemini">Gemini CLI (Google)</option>
+          <option value="aider">Aider (multi-model)</option>
+        </select>
+
+        <!-- Agent info card -->
+        <div id="agentCard" class="agent-card"></div>
+
+        <!-- Copilot: GH Token -->
+        <div id="agentFields-copilot" class="agent-fields">
+          <label class="field-label">GitHub Token <span class="required">*</span></label>
+          <input id="ghToken" type="password" class="input-field" placeholder="ghp_…" autocomplete="off">
+          <p class="field-help">
+            Personal Access Token with <strong>Copilot</strong> + <strong>repo</strong> permissions.
+            <a href="https://github.com/settings/tokens/new?scopes=repo,copilot" target="_blank" class="help-link">Create token ↗</a>
+          </p>
+        </div>
+
+        <!-- Claude: Anthropic API Key -->
+        <div id="agentFields-claude" class="agent-fields" style="display:none">
+          <label class="field-label">Anthropic API Key <span class="required">*</span></label>
+          <input id="anthropicApiKey" type="password" class="input-field" placeholder="sk-ant-…" autocomplete="off">
+          <p class="field-help">
+            API key from Anthropic Console.
+            <a href="https://console.anthropic.com/settings/keys" target="_blank" class="help-link">Get key ↗</a>
+          </p>
+        </div>
+
+        <!-- Gemini: Google API Key -->
+        <div id="agentFields-gemini" class="agent-fields" style="display:none">
+          <label class="field-label">Gemini API Key <span class="required">*</span></label>
+          <input id="geminiApiKey" type="password" class="input-field" placeholder="AIza…" autocomplete="off">
+          <p class="field-help">
+            API key from Google AI Studio.
+            <a href="https://aistudio.google.com/app/apikey" target="_blank" class="help-link">Get key ↗</a>
+          </p>
+        </div>
+
+        <!-- Aider: flexible API key + model -->
+        <div id="agentFields-aider" class="agent-fields" style="display:none">
+          <p class="field-help" style="margin-top:2px">Provide at least one API key. Model is auto-detected.</p>
+          <label class="field-label">OpenAI API Key</label>
+          <input id="openaiApiKey" type="password" class="input-field" placeholder="sk-…" autocomplete="off">
+          <label class="field-label">Anthropic API Key</label>
+          <input id="anthropicApiKey2" type="password" class="input-field" placeholder="sk-ant-…" autocomplete="off">
+          <label class="field-label">Gemini API Key</label>
+          <input id="geminiApiKey2" type="password" class="input-field" placeholder="AIza…" autocomplete="off">
+          <label class="field-label">Model override <span class="field-optional">(optional)</span></label>
+          <input id="aiderModel" type="text" class="input-field" placeholder="gpt-4o · claude-3-5-sonnet-20241022 · gemini/gemini-1.5-pro">
+          <p class="field-help">
+            <a href="https://aider.chat/docs/llms.html" target="_blank" class="help-link">See all supported models ↗</a>
+          </p>
+        </div>
+      </details>
+
+      <!-- ── Instructions ── collapsed ─────────────────────────────────────── -->
+      <details id="instructionsSection" class="collapsible config-group">
+        <summary class="config-group-summary"><span class="cg-icon">📋</span> Instructions</summary>
+        <label class="field-label" style="margin-top:8px">Instructions Repo</label>
         <input id="instructionsRepo" type="text" class="input-field" placeholder="owner/repo">
         <label class="field-label">Instructions File</label>
         <input id="instructionsFile" type="text" class="input-field" placeholder="copilot-instructions.md">
@@ -155,10 +168,10 @@
         </label>
       </details>
 
-      <!-- Collapsible: Git / Advanced -->
-      <details class="collapsible">
-        <summary>Git &amp; SDK</summary>
-        <label class="field-label">Git Name</label>
+      <!-- ── Git & SDK ── collapsed ──────────────────────────────────────────── -->
+      <details id="gitSection" class="collapsible config-group">
+        <summary class="config-group-summary"><span class="cg-icon">⚙️</span> Git &amp; SDK</summary>
+        <label class="field-label" style="margin-top:8px">Git Name</label>
         <input id="gitUserName" type="text" class="input-field" placeholder="Copilot Agent">
         <label class="field-label">Git Email</label>
         <input id="gitUserEmail" type="text" class="input-field" placeholder="copilot@example.com">
@@ -168,10 +181,10 @@
         <input id="goVersion" type="text" class="input-field" placeholder="1.22.5">
       </details>
 
-      <!-- Collapsible: Firebase -->
-      <details class="collapsible">
-        <summary>Firebase Test Lab</summary>
-        <label class="field-label">Project ID</label>
+      <!-- ── Firebase ── collapsed ──────────────────────────────────────────── -->
+      <details id="firebaseSection" class="collapsible config-group">
+        <summary class="config-group-summary"><span class="cg-icon">🔥</span> Firebase Test Lab</summary>
+        <label class="field-label" style="margin-top:8px">Project ID</label>
         <input id="firebaseProjectId" type="text" class="input-field" placeholder="my-app-12345">
         <label class="field-label">SA Key File (host path)</label>
         <input id="gcloudKeyFile" type="text" class="input-field" placeholder="C:\keys\firebase-sa-key.json">
@@ -215,11 +228,28 @@
     <div id="terminalToolbar">
       <span id="terminalTitle" class="terminal-title">Idle</span>
       <div class="terminal-tools">
+        <button id="devLogsBtn" class="btn btn-ghost btn-xs" title="Toggle verbose dev logs">🔍 Dev Logs</button>
         <button id="clearTermBtn" class="btn btn-ghost btn-xs" title="Clear terminal">✕ Clear</button>
         <button id="downloadLogsBtn" class="btn btn-ghost btn-xs" title="Download logs">⬇ Logs</button>
       </div>
     </div>
+
+    <!-- Launch progress overlay — shown while container is being created/started -->
+    <div id="launchProgress" class="launch-progress hidden">
+      <div class="lp-title" id="lpTitle">Launching…</div>
+      <ul id="lpSteps" class="lp-steps"></ul>
+    </div>
+
     <div id="terminal"></div>
+
+    <!-- Dev log panel — shown when dev mode is active -->
+    <div id="devLogPanel" class="dev-log-panel hidden">
+      <div class="dev-log-toolbar">
+        <span>🔍 Dev Logs</span>
+        <button id="clearDevLogsBtn" class="btn btn-ghost btn-xs">Clear</button>
+      </div>
+      <pre id="devLogContent" class="dev-log-content"></pre>
+    </div>
   </div>
 
 </main>
