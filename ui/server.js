@@ -155,7 +155,7 @@ function buildBinds(cfg) {
   return binds;
 }
 
-async function createAndStart(cfg, mode) {
+async function createContainer(cfg, mode) {
   // Build a unique Docker container name: user-slug + timestamp
   const slug = (cfg.sessionName || '')
     .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
@@ -164,7 +164,7 @@ async function createAndStart(cfg, mode) {
 
   const interactive = mode === 'plan';
 
-  const container = await docker.createContainer({
+  return docker.createContainer({
     name: dockerName,
     Image:        'copilot-agent:latest',
     AttachStdin:  interactive,
@@ -186,7 +186,10 @@ async function createAndStart(cfg, mode) {
       'copilot-session-name': cfg.sessionName || '',
     },
   });
+}
 
+async function createAndStart(cfg, mode) {
+  const container = await createContainer(cfg, mode);
   await container.start();
   return container;
 }
@@ -366,10 +369,15 @@ wss.on('connection', ws => {
 
           logStream = await c.logs({ stdout: true, stderr: true, follow: true, tail: 300, timestamps: false });
 
-          logStream.on('data', chunk => {
+          const soPass = new (require('stream').PassThrough)();
+          const sePass = new (require('stream').PassThrough)();
+          docker.modem.demuxStream(logStream, soPass, sePass);
+          const fwdChunk = chunk => {
             const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
             safeSend(ws, { type: 'output', data: buf.toString('base64') });
-          });
+          };
+          soPass.on('data', fwdChunk);
+          sePass.on('data', fwdChunk);
           logStream.on('end',   () => safeSend(ws, { type: 'output', data: toB64('\r\n\x1b[90m[container exited]\x1b[0m\r\n') }));
           logStream.on('error', err => safeSend(ws, { type: 'error', message: err.message }));
         } catch (err) {
@@ -426,6 +434,8 @@ wss.on('connection', ws => {
           }
 
           step('attach',    'Attaching log stream',        'active');
+          // container.logs() always uses Docker multiplex framing (8-byte header)
+          // even with Tty:true — use demuxStream to strip headers before sending to xterm
           logStream = await container.logs({ stdout: true, stderr: true, follow: true, tail: 0, timestamps: false });
           step('attach',    'Log stream attached — agent starting', 'ok');
           devLog(`[attach] streaming stdout+stderr`);
@@ -433,9 +443,18 @@ wss.on('connection', ws => {
           safeSend(ws, { type: 'progress_done' });
           safeSend(ws, { type: 'container_started', containerId: container.id, mode });
 
-          logStream.on('data', chunk => {
+          // demuxStream strips the 8-byte Docker stream header
+          const stdoutPassthrough = new (require('stream').PassThrough)();
+          const stderrPassthrough = new (require('stream').PassThrough)();
+          docker.modem.demuxStream(logStream, stdoutPassthrough, stderrPassthrough);
+
+          const forwardChunk = chunk => {
+            devLog(`[log_stream] ${chunk.length}b`);
             safeSend(ws, { type: 'output', data: bufToB64(chunk) });
-          });
+          };
+          stdoutPassthrough.on('data', forwardChunk);
+          stderrPassthrough.on('data', forwardChunk);
+
           logStream.on('end', () => {
             devLog(`[log_stream] ended for ${container.id}`);
             safeSend(ws, { type: 'output', data: toB64('\r\n\x1b[90m[container exited]\x1b[0m\r\n') });
@@ -470,31 +489,39 @@ wss.on('connection', ws => {
           catch { throw new Error('Image copilot-agent:latest not found — build it first via "🔨 Build Image"'); }
           stepP('image',    'Image ready',                 'ok');
 
+          // ── CRITICAL: attach BEFORE start so we capture all output ──────────
           stepP('create',   'Creating container (plan mode)', 'active');
-          const container = await createAndStart(msg.config, 'plan');
+          const container = await createContainer(msg.config, 'plan');
           activeId = container.id;
-          stepP('create',   'Container ready',             'ok');
           devLog(`[plan] containerId=${container.id}`);
 
           stepP('attach',   'Attaching interactive PTY',   'active');
           containerStream = await container.attach({
             stream: true, stdin: true, stdout: true, stderr: true, hijack: true,
           });
-          stepP('attach',   'Interactive session ready',   'ok');
-          devLog(`[plan] PTY attached`);
+          devLog(`[plan] PTY attached — starting container`);
 
-          safeSend(ws, { type: 'progress_done' });
-          safeSend(ws, { type: 'container_started', containerId: container.id, mode: 'plan' });
-
+          // Wire up stream BEFORE starting so no bytes are lost
           containerStream.on('data', chunk => {
+            devLog(`[plan stream] ${chunk.length}b`);
             safeSend(ws, { type: 'output', data: bufToB64(chunk) });
           });
           containerStream.on('end', () => {
-            devLog(`[plan] session ended for ${container.id}`);
+            devLog(`[plan] stream ended for ${container.id}`);
             safeSend(ws, { type: 'output', data: toB64('\r\n\x1b[90m[planning session ended — click Execute Plan to run]\x1b[0m\r\n') });
             safeSend(ws, { type: 'container_stopped', containerId: container.id });
             safeSend(ws, { type: 'plan_complete' });
           });
+          containerStream.on('error', err => devLog(`[plan stream error] ${err.message}`));
+
+          // NOW start — all output goes directly to our attached stream
+          await container.start();
+          stepP('create',   'Container started',           'ok');
+          stepP('attach',   'Interactive session ready',   'ok');
+
+          safeSend(ws, { type: 'progress_done' });
+          safeSend(ws, { type: 'container_started', containerId: container.id, mode: 'plan' });
+
         } catch (err) {
           devLog(`[plan error] ${err.stack || err.message}`);
           safeSend(ws, { type: 'progress_error', message: err.message });
