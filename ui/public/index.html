@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Copilot Agent</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+</head>
+<body>
+
+<!-- ── Header ──────────────────────────────────────────────────────────────── -->
+<header>
+  <div class="header-left">
+    <span class="logo">🤖 Copilot Agent</span>
+    <span id="dockerStatus" class="badge badge-offline">● Connecting…</span>
+  </div>
+  <div class="header-right">
+    <span id="dockerLabel" class="remote-label">Local Docker</span>
+    <button id="remoteBtn" class="btn btn-ghost btn-sm" title="Configure Docker host">⚙ Remote</button>
+  </div>
+</header>
+
+<!-- ── Main layout ─────────────────────────────────────────────────────────── -->
+<main>
+
+  <!-- LEFT SIDEBAR ──────────────────────────────────────────────────────────── -->
+  <aside id="sidebar">
+
+    <!-- Running containers selector -->
+    <section class="section">
+      <div class="section-header">
+        <span class="section-title">Containers</span>
+        <button id="refreshContainersBtn" class="btn btn-ghost btn-xs" title="Refresh">↻</button>
+      </div>
+      <select id="containerSelect" class="input-field">
+        <option value="">— no running containers —</option>
+      </select>
+      <div id="containerInfo" class="container-info hidden"></div>
+    </section>
+
+    <!-- Configuration form -->
+    <section class="section">
+      <div class="section-header">
+        <span class="section-title">Configuration</span>
+        <button id="clearFormBtn" class="btn btn-ghost btn-xs" title="Clear saved form">✕</button>
+      </div>
+
+      <label class="field-label">Project Path <span class="required">*</span></label>
+      <input id="projectPath" type="text" class="input-field" placeholder="D:\Code\my-project">
+
+      <label class="field-label">GitHub Token <span class="required">*</span></label>
+      <input id="ghToken" type="password" class="input-field" placeholder="ghp_…" autocomplete="off">
+
+      <label class="field-label">Task</label>
+      <textarea id="task" class="input-field textarea" rows="3" placeholder="Describe what the agent should do…&#10;(or leave blank to read from TASK.md in project root)"></textarea>
+
+      <label class="field-label">Task File (optional)</label>
+      <input id="taskFile" type="text" class="input-field" placeholder="/workspace/SPRINT.md">
+
+      <!-- Collapsible: Instructions -->
+      <details class="collapsible">
+        <summary>Instructions</summary>
+        <label class="field-label">Instructions Repo</label>
+        <input id="instructionsRepo" type="text" class="input-field" placeholder="owner/repo">
+        <label class="field-label">Instructions File</label>
+        <input id="instructionsFile" type="text" class="input-field" placeholder="copilot-instructions.md">
+        <label class="field-label">Branch</label>
+        <input id="instructionsBranch" type="text" class="input-field" placeholder="main">
+        <label class="checkbox-label">
+          <input id="useHostInstructions" type="checkbox" checked>
+          Load from <code>~/.copilot/</code> on this machine
+        </label>
+      </details>
+
+      <!-- Collapsible: Git / Advanced -->
+      <details class="collapsible">
+        <summary>Git &amp; SDK</summary>
+        <label class="field-label">Git Name</label>
+        <input id="gitUserName" type="text" class="input-field" placeholder="Copilot Agent">
+        <label class="field-label">Git Email</label>
+        <input id="gitUserEmail" type="text" class="input-field" placeholder="copilot@example.com">
+        <label class="field-label">Flutter Version</label>
+        <input id="flutterVersion" type="text" class="input-field" placeholder="3.24.5">
+        <label class="field-label">Go Version</label>
+        <input id="goVersion" type="text" class="input-field" placeholder="1.22.5">
+      </details>
+
+      <!-- Collapsible: Firebase -->
+      <details class="collapsible">
+        <summary>Firebase Test Lab</summary>
+        <label class="field-label">Project ID</label>
+        <input id="firebaseProjectId" type="text" class="input-field" placeholder="my-app-12345">
+        <label class="field-label">SA Key File (host path)</label>
+        <input id="gcloudKeyFile" type="text" class="input-field" placeholder="C:\keys\firebase-sa-key.json">
+        <label class="field-label">Test Device</label>
+        <input id="firebaseTestDevice" type="text" class="input-field" placeholder="model=oriole,version=33,locale=en,orientation=portrait">
+      </details>
+    </section>
+
+    <!-- Image status -->
+    <section class="section">
+      <div class="section-header">
+        <span class="section-title">Docker Image</span>
+        <span id="imageStatus" class="badge badge-offline">Checking…</span>
+      </div>
+      <button id="buildImageBtn" class="btn btn-ghost btn-sm full-width">🔨 Build Image</button>
+    </section>
+
+    <!-- Action buttons -->
+    <section class="section actions-section">
+      <div class="btn-grid">
+        <button id="planBtn"    class="btn btn-plan"    disabled title="Interactive planning session">🗺 Plan</button>
+        <button id="startBtn"   class="btn btn-start"   disabled title="Start autonomous run">▶ Start</button>
+        <button id="resumeBtn"  class="btn btn-resume"  disabled title="Force resume last session">↩ Resume</button>
+        <button id="newBtn"     class="btn btn-new"     disabled title="Wipe state, start fresh">🆕 New</button>
+        <button id="cancelBtn"  class="btn btn-cancel"  disabled title="Graceful stop — saves report">⏹ Cancel</button>
+        <button id="abortBtn"   class="btn btn-abort"   disabled title="Force kill (SIGKILL)">💀 Abort</button>
+      </div>
+
+      <!-- Execute Plan — shown after plan mode completes -->
+      <button id="execPlanBtn" class="btn btn-start full-width hidden" title="Execute the plan Copilot just created">
+        ▶ Execute Plan
+      </button>
+
+      <div id="modeTag" class="mode-tag hidden"></div>
+    </section>
+
+  </aside>
+
+  <!-- RIGHT PANEL: TERMINAL ─────────────────────────────────────────────────── -->
+  <div id="terminalPanel">
+    <div id="terminalToolbar">
+      <span id="terminalTitle" class="terminal-title">Idle</span>
+      <div class="terminal-tools">
+        <button id="clearTermBtn" class="btn btn-ghost btn-xs" title="Clear terminal">✕ Clear</button>
+        <button id="downloadLogsBtn" class="btn btn-ghost btn-xs" title="Download logs">⬇ Logs</button>
+      </div>
+    </div>
+    <div id="terminal"></div>
+  </div>
+
+</main>
+
+<!-- ── Status bar ──────────────────────────────────────────────────────────── -->
+<footer id="statusBar">
+  <span id="statusMsg">Ready</span>
+  <span id="activeContainerLabel"></span>
+</footer>
+
+<!-- ── Remote Docker Modal ─────────────────────────────────────────────────── -->
+<div id="remoteModal" class="modal hidden">
+  <div class="modal-backdrop" id="remoteModalBackdrop"></div>
+  <div class="modal-content">
+    <h3 class="modal-title">Docker Host</h3>
+
+    <div class="radio-group">
+      <label class="radio-label"><input type="radio" name="dockerType" value="local" checked> Local</label>
+      <label class="radio-label"><input type="radio" name="dockerType" value="ssh">   SSH</label>
+      <label class="radio-label"><input type="radio" name="dockerType" value="tcp">   TCP</label>
+    </div>
+
+    <div id="sshFields" class="docker-fields hidden">
+      <label class="field-label">Host</label>
+      <input id="sshHost" type="text" class="input-field" placeholder="hostname or IP">
+      <div class="field-row">
+        <div class="field-col">
+          <label class="field-label">Port</label>
+          <input id="sshPort" type="number" class="input-field" value="22">
+        </div>
+        <div class="field-col">
+          <label class="field-label">Username</label>
+          <input id="sshUser" type="text" class="input-field" placeholder="ubuntu">
+        </div>
+      </div>
+      <label class="field-label">SSH Key File</label>
+      <input id="sshKeyPath" type="text" class="input-field" placeholder="C:\Users\you\.ssh\id_rsa">
+      <label class="field-label">Password (if no key)</label>
+      <input id="sshPassword" type="password" class="input-field" autocomplete="off">
+    </div>
+
+    <div id="tcpFields" class="docker-fields hidden">
+      <label class="field-label">Host</label>
+      <input id="tcpHost" type="text" class="input-field" placeholder="192.168.1.100">
+      <label class="field-label">Port</label>
+      <input id="tcpPort" type="number" class="input-field" value="2375">
+    </div>
+
+    <div class="info-box">
+      <strong>💡 SSH Tunnel (simplest remote access)</strong><br>
+      Run on your machine:<br>
+      <code>ssh -L 3000:localhost:3000 user@remote-host</code><br>
+      Then open <code>http://localhost:3000</code> — the UI server on the remote host connects to its local Docker.
+    </div>
+
+    <div id="dockerTestResult" class="test-result hidden"></div>
+
+    <div class="modal-footer">
+      <button id="testDockerBtn"   class="btn btn-ghost">Test Connection</button>
+      <button id="connectDockerBtn" class="btn btn-start">Connect</button>
+      <button id="cancelDockerBtn" class="btn btn-cancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Build Image Modal ───────────────────────────────────────────────────── -->
+<div id="buildModal" class="modal hidden">
+  <div class="modal-backdrop" id="buildModalBackdrop"></div>
+  <div class="modal-content modal-wide">
+    <h3 class="modal-title">Building Docker Image</h3>
+    <div id="buildOutput" class="build-output"></div>
+    <div class="modal-footer">
+      <button id="closeBuildBtn" class="btn btn-ghost" disabled>Close</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

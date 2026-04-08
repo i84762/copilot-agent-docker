@@ -1,112 +1,374 @@
 # Copilot Agent Docker
 
-A generic Docker container that runs **GitHub Copilot CLI in autopilot mode** on any local project.  
-Drop it on a Windows folder, pass a task, and let the agent work autonomously.
+Run **GitHub Copilot CLI autonomously** on any local project folder.  
+Point it at your code, give it a task — it detects the project type, installs the right SDK, plans, executes, tests, and writes a full change report. No prompts, no babysitting.
 
 ---
 
-## Quick Start (Windows PowerShell)
+## Prerequisites
+
+| Requirement | Notes |
+|-------------|-------|
+| **Docker Desktop** | [Install](https://www.docker.com/products/docker-desktop/) — must be running |
+| **PowerShell 7+** | [Install](https://aka.ms/powershell) — required on Windows |
+| **GitHub PAT** | Token with **Copilot Requests** + **repo** scopes → [Create one](https://github.com/settings/personal-access-tokens/new) |
+
+---
+
+## Quick Start
 
 ```powershell
-# 1. Set your GitHub token (needs Copilot + repo scopes)
+# 1. Set your GitHub token
 $env:GH_TOKEN = "ghp_your_token_here"
 
-# 2. Run against any project folder
+# 2. Run against any project — task inline
 .\run-copilot.ps1 `
   -ProjectPath "D:\Code\my-flutter-app" `
-  -Task "Add user authentication with Firebase, write unit tests, and open a PR"
+  -Task "Add Firebase authentication, write widget tests, open a PR"
 ```
 
-The container will:
-1. Detect the project type (Flutter, Java, Node, Python, .NET, Go, Rust, Ruby)
-2. Download and cache the required SDK
-3. Fetch your global Copilot instructions from GitHub (if configured)
-4. Read the task and launch Copilot CLI in **autopilot mode**
-5. Grant all permissions automatically (no confirmation prompts)
+Or place a `TASK.md` in your project root and omit `-Task` entirely:
+
+```powershell
+.\run-copilot.ps1 -ProjectPath "D:\Code\my-flutter-app"
+```
 
 ---
 
-## Task Resolution (priority order)
+## Providing a Task
 
-| Method | How |
-|--------|-----|
-| `-Task "..."` flag | Inline string passed to the script |
-| `-TaskFile path\to\file.md` | Path to a markdown task file |
-| `TASK.md` / `GOALS.md` / `MISSION.md` in project root | Auto-discovered |
-| `COPILOT_TASK` env var | Set before running |
+The agent looks for its task in this order — **first match wins**:
+
+| Priority | How | Example |
+|----------|-----|---------|
+| 1 | `-Task "..."` argument | `-Task "Fix all failing tests"` |
+| 2 | `-TaskFile path\to\file.md` argument | `-TaskFile "D:\tasks\sprint.md"` |
+| 3 | `TASK.md` in project root | auto-discovered |
+| 4 | `GOALS.md` in project root | auto-discovered |
+| 5 | `GOAL.md` / `MISSION.md` / `TODO.md` / `.copilot-task.md` | auto-discovered |
+| 6 | Saved task from last interrupted session | auto-resumed |
+
+You never need to pass `-Task` if one of the auto-discovered files exists.
+
+---
+
+## All Flags
+
+```
+.\run-copilot.ps1 [flags]
+```
+
+### Required
+
+| Flag | Type | Description |
+|------|------|-------------|
+| `-ProjectPath` | string | Full Windows path to your project folder |
+
+### Task
+
+| Flag | Type | Description |
+|------|------|-------------|
+| `-Task` | string | Inline task description |
+| `-TaskFile` | string | Path to a markdown task file (Windows path) |
+
+### Mode
+
+| Flag | Type | Description |
+|------|------|-------------|
+| `-Plan` | switch | **Interactive planning session.** Copilot reads the code and task, asks clarifying questions, suggests improvements, then writes `PLAN.md`. Re-run without `-Plan` to execute. |
+| `-Resume` | switch | **Force resume** the last session even if it was marked complete. |
+| `-NewSession` | switch | **Wipe all saved state** and start completely fresh. Use when you want a clean slate on the same project. |
+| `-Rebuild` | switch | Force a Docker image rebuild (needed after Dockerfile changes). |
+
+### Global Instructions
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `-InstructionsRepo` | string | — | `owner/repo` of your GitHub repo containing `copilot-instructions.md` |
+| `-InstructionsFile` | string | `copilot-instructions.md` | File path inside that repo |
+| `-InstructionsBranch` | string | `main` | Branch to read from |
+| `-NoHostInstructions` | switch | — | Skip reading `~/.copilot/copilot-instructions.md` from your machine |
+
+### Git Identity
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `-GitUserName` | string | `Copilot Agent` | Git commit author name |
+| `-GitUserEmail` | string | `copilot@example.com` | Git commit author email |
+
+### Firebase Test Lab
+
+| Flag | Type | Description |
+|------|------|-------------|
+| `-FirebaseProjectId` | string | Your Firebase / GCP project ID |
+| `-GcloudKeyFile` | string | Windows path to service account JSON key file |
+| `-GoogleCredentialsJson` | string | Full JSON key contents as a string (alternative to key file) |
+| `-FirebaseTestDevice` | string | Device spec (default: `model=oriole,version=33,locale=en,orientation=portrait`) |
+| `-FirebaseTestTimeout` | string | Per-test timeout (default: `5m`) |
+
+### SDK Versions
+
+| Flag | Type | Default |
+|------|------|---------|
+| `-FlutterVersion` | string | `3.24.5` |
+| `-GoVersion` | string | `1.22.5` |
+
+---
+
+## Recommended Workflow
+
+### First time on a project
+
+```powershell
+# Step 1 — Plan (interactive, ~5-10 min)
+#   Copilot reads the codebase, asks you questions, writes PLAN.md
+.\run-copilot.ps1 -ProjectPath "D:\Code\my-app" -Plan -Task "Add user auth with JWT"
+
+# Review / edit PLAN.md in your project folder, then:
+
+# Step 2 — Execute (autonomous, no input needed)
+.\run-copilot.ps1 -ProjectPath "D:\Code\my-app"
+```
+
+### If the container is stopped mid-task
+
+Just re-run the same command. The agent detects the interrupted session and resumes automatically:
+
+```powershell
+# Auto-resumes from .copilot-session/state.json
+.\run-copilot.ps1 -ProjectPath "D:\Code\my-app"
+```
+
+### Start completely fresh on the same project
+
+```powershell
+.\run-copilot.ps1 -ProjectPath "D:\Code\my-app" -NewSession -Task "New task"
+```
+
+### Force resume of a completed session
+
+```powershell
+.\run-copilot.ps1 -ProjectPath "D:\Code\my-app" -Resume
+```
+
+---
+
+## Session State
+
+The agent saves state to your project folder so work survives container restarts:
+
+```
+your-project/
+└── .copilot-session/
+    ├── state.json          ← task, status, last checkpoint, session ID
+    ├── copilot-home/       ← persisted ~/.copilot (enables native /resume)
+└── .copilot-reports/
+    └── 2026-04-06_10-00-00/
+        ├── SUMMARY.md      ← read this — what was done, commits, test results
+        ├── CHANGES.diff    ← full unified diff of all code changes
+        ├── COMMIT_LOG.txt  ← git log with file stats
+        ├── FILES_CHANGED.txt
+        ├── TEST_RESULTS.txt
+        └── FIREBASE_RESULTS.txt
+    └── latest/             ← symlink to most recent report
+└── PLAN.md                 ← generated by --plan, executed on next run
+```
+
+> `.copilot-session/` and `.copilot-reports/` are in `.gitignore` and will not be committed.
+
+**Session statuses:**
+
+| Status | Meaning |
+|--------|---------|
+| `in_progress` | Container stopped mid-task — will auto-resume on next run |
+| `planned` | `PLAN.md` written, ready to execute — next run starts autonomously |
+| `complete` | All tasks done — next run starts a fresh session |
+
+---
+
+## Auto-Detected Project Types
+
+The agent detects project type from files in your project root and installs the correct SDK automatically:
+
+| Detected by | Project type | SDK installed | LSP |
+|-------------|-------------|---------------|-----|
+| `pubspec.yaml` | Flutter / Dart | Flutter SDK + precache | Dart LSP |
+| `pom.xml` | Java / Maven | JDK 17 + Maven | — |
+| `build.gradle*` | Java / Gradle | JDK 17 | — |
+| `package.json` | Node.js | npm install | TypeScript LSP (if TS project) |
+| `requirements.txt` / `pyproject.toml` | Python | pip install | pylsp |
+| `*.csproj` / `*.sln` | .NET | .NET SDK LTS | — |
+| `go.mod` | Go | Go toolchain | — |
+| `Cargo.toml` | Rust | Rust via rustup | — |
+| `Gemfile` | Ruby | Ruby + bundler | — |
+
+SDKs are cached in a Docker named volume (`copilot_sdk_cache`) and are **not re-downloaded** on subsequent runs.
 
 ---
 
 ## Global Instructions from GitHub
 
-Host your `copilot-instructions.md` in a GitHub repo (see `sample-instructions/`):
+Host your own `copilot-instructions.md` in a GitHub repo to define standing rules for the agent across all your projects:
 
 ```powershell
 .\run-copilot.ps1 `
   -ProjectPath "D:\Code\my-app" `
-  -Task "Refactor the payment module" `
   -InstructionsRepo "myuser/copilot-config"
 ```
 
-The container fetches `copilot-instructions.md` from the `main` branch and merges
-it with the current project task before starting the agent.
+A ready-to-use template is in `sample-instructions/copilot-instructions.md`.  
+Copy it to your own repo and customise it — the agent will fetch it at startup.
 
 ---
 
-## Environment Variables Reference
+## Global Instructions from Your Machine
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `GH_TOKEN` | ✅ | GitHub PAT with **Copilot Requests** + repo scopes |
-| `COPILOT_TASK` | (see task resolution) | Inline task |
-| `COPILOT_TASK_FILE` | (see task resolution) | Container path to task file |
-| `COPILOT_INSTRUCTIONS_REPO` | Optional | `owner/repo` of your global instructions |
-| `COPILOT_INSTRUCTIONS_FILE` | Optional | File path in repo (default: `copilot-instructions.md`) |
-| `COPILOT_INSTRUCTIONS_BRANCH` | Optional | Branch (default: `main`) |
-| `GIT_USER_NAME` | Optional | Git commit author name |
-| `GIT_USER_EMAIL` | Optional | Git commit author email |
-| `FLUTTER_VERSION` | Optional | Flutter version to install (default: `3.24.5`) |
-| `GO_VERSION` | Optional | Go version to install (default: `1.22.5`) |
+The container **automatically mounts** `%USERPROFILE%\.copilot` (your Windows home `.copilot` folder) into the container at startup.
 
----
+If `%USERPROFILE%\.copilot\copilot-instructions.md` exists it is loaded as global instructions — no flags needed:
 
-## Supported Project Types (auto-detected)
+```
+C:\Users\YourName\.copilot\
+└── copilot-instructions.md   ← always loaded automatically
+```
 
-| Indicator file | Detected as | SDK installed |
-|----------------|-------------|---------------|
-| `pubspec.yaml` | Flutter | Flutter + Dart LSP |
-| `pom.xml` | Java / Maven | JDK 17 + Maven |
-| `build.gradle` | Java / Gradle | JDK 17 |
-| `package.json` | Node.js | Node + npm deps |
-| `requirements.txt` / `pyproject.toml` | Python | Python deps + pylsp |
-| `*.csproj` / `*.sln` | .NET | .NET SDK (LTS) |
-| `go.mod` | Go | Go toolchain |
-| `Cargo.toml` | Rust | Rust via rustup |
-| `Gemfile` | Ruby | Ruby + bundler |
+**Priority / merge order:**
 
----
+| Source | When loaded |
+|--------|-------------|
+| GitHub repo (`-InstructionsRepo`) | If env var set — fetched at startup |
+| Host machine (`~/.copilot/`) | Always (unless `-NoHostInstructions`) |
 
-## SDK Cache
+If **both** sources exist they are merged: repo instructions come first, then host instructions are appended.
 
-SDKs are stored in a named Docker volume (`copilot_sdk_cache`) so they are
-**not re-downloaded** on subsequent runs.
-
----
-
-## Rebuilding the Image
+**To disable host instructions for one run:**
 
 ```powershell
-.\run-copilot.ps1 -ProjectPath "D:\Code\my-app" -Task "..." -Rebuild
+.\run-copilot.ps1 -ProjectPath "D:\Code\my-app" -NoHostInstructions
+```
+
+The banner shows which instructions file was found:
+
+```
+  HostInst: C:\Users\YourName\.copilot\copilot-instructions.md
+```
+
+The agent also reads instructions from these files **inside your project** (standard Copilot locations):
+
+```
+AGENTS.md
+.github/copilot-instructions.md
+.github/instructions/**/*.instructions.md
 ```
 
 ---
 
-## Safety Rules (enforced via instructions)
+## Firebase Test Lab Setup
 
-- ❌ Never deletes the repository (`rm -rf /workspace` is forbidden)
-- ✅ Commits frequently with descriptive messages
-- ✅ Fixes errors automatically before asking for help
-- ✅ Works until all tasks are complete
+Firebase Test Lab lets the agent run integration tests on real Android devices without a local emulator.
+
+### 1. Create a service account key
+
+1. Open [Firebase Console](https://console.firebase.google.com) → your project → **Project Settings → Service Accounts**
+2. Click **Generate new private key** → save as `firebase-sa-key.json`
+3. Go to [IAM](https://console.cloud.google.com/iam-admin/iam) → grant the service account the **Firebase Test Lab Admin** role
+
+### 2. Run with Firebase enabled
+
+```powershell
+.\run-copilot.ps1 `
+  -ProjectPath "D:\Code\my-flutter-app" `
+  -Task "Run all integration tests on device" `
+  -FirebaseProjectId "my-app-12345" `
+  -GcloudKeyFile "C:\keys\firebase-sa-key.json"
+```
+
+The agent will build the APK and run tests via `ftl-test android` automatically.  
+List available devices: `gcloud firebase test android models list`
+
+---
+
+## Publishing the Image
+
+The included GitHub Actions workflow (`.github/workflows/publish.yml`) builds and pushes the image to both **ghcr.io** and **Docker Hub** on every push to `main`.
+
+### Required GitHub Secrets
+
+Go to your repo → **Settings → Secrets and variables → Actions → New repository secret**:
+
+| Secret | Value |
+|--------|-------|
+| `DOCKERHUB_USERNAME` | Your Docker Hub username |
+| `DOCKERHUB_TOKEN` | Docker Hub access token ([create one](https://hub.docker.com/settings/security)) |
+
+> `GITHUB_TOKEN` is automatic — no setup needed for ghcr.io.
+
+Once set, push to `main` and the image will be published to:
+- `ghcr.io/YOUR_USERNAME/copilot-agent-docker:latest`
+- `YOUR_USERNAME/copilot-agent:latest`
+
+---
+
+## Web UI
+
+A browser-based interface to configure, launch, and monitor the agent — including a fully interactive terminal for plan sessions.
+
+### Prerequisites
+
+- **Node.js 18+** — [Install](https://nodejs.org)
+
+### Start the UI
+
+```powershell
+cd copilot-agent-docker\ui
+.\start-ui.ps1
+# Opens http://localhost:3000 automatically
+
+# Custom port:
+.\start-ui.ps1 -Port 8080
+```
+
+### What the UI provides
+
+| Feature | Description |
+|---------|-------------|
+| **Configuration form** | All agent parameters with auto-save to browser localStorage |
+| **Container selector** | Dropdown of running copilot-agent containers; click to tail logs |
+| **Plan mode terminal** | Full interactive xterm.js terminal — talk to Copilot, it reads your code and asks questions |
+| **Execute Plan** | After planning, one click to run the agent autonomously on the created plan |
+| **Log streaming** | Live ANSI-coloured output from any running container |
+| **Build image** | Build the Docker image from the UI with streamed progress |
+| **Cancel / Abort** | Graceful stop (generates change report) or force kill |
+| **Remote Docker host** | Connect to a remote Docker host via SSH or TCP |
+| **Download logs** | Save the full terminal output as a `.log` file |
+
+### Remote access (SSH tunnel)
+
+Run the UI server on a remote machine and access it from your local browser:
+
+```bash
+# On your local machine — forward remote port 3000 to localhost:3000
+ssh -L 3000:localhost:3000 user@remote-host
+
+# The remote UI server connects to the remote Docker daemon
+# Access in browser: http://localhost:3000
+```
+
+Or connect the UI directly to a remote Docker socket:
+
+1. Click **⚙ Remote** in the top-right of the UI
+2. Select **SSH** or **TCP**
+3. Enter host details and click **Connect**
+
+### Interactive Plan mode flow
+
+1. Fill in **Project Path** and **GitHub Token**  
+2. Enter your task (or leave blank to auto-read from `TASK.md`)  
+3. Click **🗺 Plan** — a container starts, the terminal becomes interactive  
+4. Copilot reads your code and task, then asks clarifying questions in the terminal  
+5. Reply in the terminal — Copilot refines the plan  
+6. When satisfied, click **▶ Execute Plan** — a new container runs the plan autonomously  
+7. Monitor progress in the live log view; a change report appears in `.copilot-reports/`
 
 ---
 
@@ -114,13 +376,32 @@ SDKs are stored in a named Docker volume (`copilot_sdk_cache`) so they are
 
 ```
 copilot-agent-docker/
-├── Dockerfile                        # Container image definition
-├── docker-compose.yml                # Compose config (volumes, env vars)
-├── run-copilot.ps1                   # Windows PowerShell launcher
+├── Dockerfile                           # Container image
+├── docker-compose.yml                   # Volume mounts + all env vars
+├── run-copilot.ps1                      # Windows CLI launcher
+├── .env.example                         # Copy to .env for direct compose usage
+├── .gitignore
+├── ui/                                  # Web UI (Node.js)
+│   ├── server.js                        # Express + WebSocket backend
+│   ├── package.json
+│   ├── start-ui.ps1                     # Windows UI launcher
+│   └── public/
+│       ├── index.html                   # Single-page app
+│       ├── app.js                       # Frontend logic (xterm.js, WebSocket)
+│       └── style.css                    # Dark GitHub theme
 ├── scripts/
-│   ├── entrypoint.sh                 # Container startup logic
-│   ├── detect-and-install.sh         # Project type detection + SDK install
-│   └── launch-copilot.sh             # Copilot CLI launch via tmux
-└── sample-instructions/
-    └── copilot-instructions.md       # Template — upload to YOUR GitHub repo
+│   ├── entrypoint.sh                    # Startup: auth, SDK, mode routing
+│   ├── detect-and-install.sh            # Project type detection + SDK install
+│   ├── setup-firebase.sh                # gcloud auth + ftl-test helper
+│   ├── session-state.sh                 # Save/load/resume session state
+│   ├── plan-mode.sh                     # Interactive planning session
+│   ├── resume-session.sh                # Build resume context from git + plan
+│   ├── launch-copilot.sh                # Start Copilot CLI via tmux (autopilot)
+│   └── generate-report.sh               # Write change report to /workspace
+├── sample-instructions/
+│   └── copilot-instructions.md          # Template — upload to your GitHub repo
+└── .github/
+    └── workflows/
+        └── publish.yml                  # Auto-build + push to ghcr.io + Docker Hub
 ```
+
