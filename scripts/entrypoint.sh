@@ -12,16 +12,23 @@ ok()   { echo -e "${GREEN}[✓]${NC} $1"; }
 warn() { echo -e "${YELLOW}[⚠]${NC} $1"; }
 err()  { echo -e "${RED}[✗]${NC} $1"; exit 1; }
 
+AGENT="${AGENT:-copilot}"
+
 echo ""
 echo -e "${BOLD}╔══════════════════════════════════════════════╗${NC}"
 echo -e "${BOLD}║       Copilot Agent Docker Container         ║${NC}"
+echo -e "${BOLD}║       Agent: ${AGENT}${NC}"
 echo -e "${BOLD}╚══════════════════════════════════════════════╝${NC}"
 echo ""
 
 # ── 1. Auth ─────────────────────────────────────────────────
 export GH_TOKEN="${GH_TOKEN:-$GITHUB_TOKEN}"
-[ -z "$GH_TOKEN" ] && err "GH_TOKEN or GITHUB_TOKEN must be set."
-ok "GitHub token found"
+
+# GH_TOKEN required for copilot; optional for others (needed for git push + instructions fetch)
+if [ "$AGENT" = "copilot" ] && [ -z "$GH_TOKEN" ]; then
+    err "GH_TOKEN or GITHUB_TOKEN must be set for the copilot agent."
+fi
+[ -n "$GH_TOKEN" ] && ok "GitHub token found" || warn "No GH_TOKEN — git push and private repo access will not work"
 
 # ── 2. Git config ───────────────────────────────────────────
 git config --global credential.helper \
@@ -152,15 +159,15 @@ fi
 if [ "${COPILOT_FORCE_RESUME:-false}" = "true" ] || is_session_incomplete; then
     log "Incomplete session detected — resuming..."
     source /usr/local/bin/resume-session.sh
-    exec /usr/local/bin/launch-copilot.sh "$TASK" "resume"
+    exec /usr/local/bin/launch-agent.sh "$TASK" "resume"
 fi
 
 # EXECUTE PLANNED WORK — a plan exists, jump straight into autopilot
 if is_session_planned && [ -f /workspace/PLAN.md ]; then
     log "Plan found — executing autonomously..."
-    exec /usr/local/bin/launch-copilot.sh "$TASK" "planned"
+    exec /usr/local/bin/launch-agent.sh "$TASK" "planned"
 fi
 
 # NORMAL MODE — fresh autonomous run
-exec /usr/local/bin/launch-copilot.sh "$TASK" "normal"
+exec /usr/local/bin/launch-agent.sh "$TASK" "normal"
 

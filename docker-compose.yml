@@ -13,8 +13,16 @@ services:
     tty: true
 
     environment:
-      # ── Required ────────────────────────────────────────────
-      - GH_TOKEN=${GH_TOKEN}               # GitHub PAT with Copilot + repo perms
+      # ── Agent selection ───────────────────────────────────────
+      # Which AI agent to use: copilot | claude | gemini | aider
+      - AGENT=${AGENT:-copilot}
+
+      # ── Required (per agent) ──────────────────────────────────
+      - GH_TOKEN=${GH_TOKEN:-}               # GitHub PAT — required for: copilot; optional for others
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}  # Required for: claude, aider (if using Claude models)
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}        # Required for: gemini, aider (if using Gemini models)
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}        # Required for: aider (if using OpenAI models)
+      - AIDER_MODEL=${AIDER_MODEL:-}              # Aider model override (e.g. gpt-4o, claude-3-5-sonnet-20241022)
 
       # ── Git identity (optional but recommended) ──────────────
       - GIT_USER_NAME=${GIT_USER_NAME:-Copilot Agent}

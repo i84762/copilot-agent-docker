@@ -206,12 +206,110 @@ function updateTerminalTitle() {
   else                           { t.textContent = 'Idle'; }
 }
 
+// ── Agent metadata ────────────────────────────────────────────────────────────
+
+const AGENT_INFO = {
+  copilot: {
+    name: 'GitHub Copilot CLI',
+    desc: 'Official GitHub Copilot agent. Requires a GitHub Copilot subscription and a Personal Access Token with <code>repo</code> + <code>copilot</code> scopes.',
+    link: 'https://github.com/settings/tokens/new?scopes=repo,copilot',
+    linkText: 'Create GitHub token ↗',
+    color: 'var(--green)',
+  },
+  claude: {
+    name: 'Claude Code',
+    desc: 'Anthropic\'s coding agent (Claude 3.5 Sonnet by default). Requires an Anthropic API key. Highly capable for large refactors and complex reasoning.',
+    link: 'https://console.anthropic.com/settings/keys',
+    linkText: 'Get Anthropic key ↗',
+    color: 'var(--orange)',
+  },
+  gemini: {
+    name: 'Gemini CLI',
+    desc: 'Google\'s Gemini coding agent. Requires a Google AI Studio API key. Best for multi-modal tasks and large context windows.',
+    link: 'https://aistudio.google.com/app/apikey',
+    linkText: 'Get Gemini key ↗',
+    color: 'var(--blue)',
+  },
+  aider: {
+    name: 'Aider',
+    desc: 'Flexible open-source coding agent. Works with OpenAI, Anthropic, or Gemini models. Provide at least one API key — the model is auto-detected.',
+    link: 'https://aider.chat/docs/llms.html',
+    linkText: 'Supported models ↗',
+    color: 'var(--purple)',
+  },
+};
+
+function renderAgentCard(agent) {
+  const info = AGENT_INFO[agent];
+  if (!info) { $('agentCard').classList.remove('visible'); return; }
+  $('agentCard').style.borderLeftColor = info.color;
+  $('agentCard').innerHTML =
+    `<strong>${info.name}</strong> — ${info.desc}<br>` +
+    `<a href="${info.link}" target="_blank">${info.linkText}</a>`;
+  $('agentCard').classList.add('visible');
+}
+
+// ── Setup hint (first-time) ───────────────────────────────────────────────────
+
+function checkSetupHint() {
+  const saved = localStorage.getItem(STORAGE_KEY);
+  if (!saved) {
+    $('setupHint').classList.remove('hidden');
+  } else {
+    $('setupHint').classList.add('hidden');
+  }
+}
+
+// ── Inline field validation ───────────────────────────────────────────────────
+
+function setFieldError(inputId, msg) {
+  const el = $(inputId);
+  if (!el) return;
+  if (msg) {
+    el.classList.add('field-invalid');
+    let errEl = el.parentNode.querySelector('.field-error-msg');
+    if (!errEl) {
+      errEl = document.createElement('p');
+      errEl.className = 'field-error-msg';
+      el.parentNode.insertBefore(errEl, el.nextSibling);
+    }
+    errEl.textContent = msg;
+    errEl.classList.add('visible');
+  } else {
+    el.classList.remove('field-invalid');
+    const errEl = el.parentNode.querySelector('.field-error-msg');
+    if (errEl) errEl.classList.remove('visible');
+  }
+}
+
+function clearFieldErrors() {
+  document.querySelectorAll('.field-invalid').forEach(el => el.classList.remove('field-invalid'));
+  document.querySelectorAll('.field-error-msg.visible').forEach(el => el.classList.remove('visible'));
+}
+
+['projectPath','ghToken','anthropicApiKey','geminiApiKey'].forEach(id => {
+  const el = $(id);
+  if (!el) return;
+  el.addEventListener('blur', () => {
+    if (el.value.trim()) setFieldError(id, null);
+  });
+  el.addEventListener('input', () => {
+    if (el.value.trim()) setFieldError(id, null);
+  });
+});
+
 // ── Form helpers ──────────────────────────────────────────────────────────────
 
 function getConfig() {
+  const agent = $('agent').value;
   return {
     projectPath:          $('projectPath').value.trim(),
-    ghToken:              $('ghToken').value.trim(),
+    agent:                agent,
+    ghToken:              $('ghToken')?.value.trim() || '',
+    anthropicApiKey:      agent === 'aider' ? ($('anthropicApiKey2')?.value.trim() || '') : ($('anthropicApiKey')?.value.trim() || ''),
+    geminiApiKey:         agent === 'aider' ? ($('geminiApiKey2')?.value.trim() || '') : ($('geminiApiKey')?.value.trim() || ''),
+    openaiApiKey:         $('openaiApiKey')?.value.trim() || '',
+    aiderModel:           $('aiderModel')?.value.trim() || '',
     task:                 $('task').value.trim(),
     taskFile:             $('taskFile').value.trim(),
     instructionsRepo:     $('instructionsRepo').value.trim(),
@@ -229,10 +327,34 @@ function getConfig() {
 }
 
 function validateConfig() {
+  clearFieldErrors();
   const cfg = getConfig();
-  if (!cfg.projectPath) { toast('Project Path is required', 'error'); return null; }
-  if (!cfg.ghToken)     { toast('GitHub Token is required', 'error'); return null; }
-  return cfg;
+  let valid = true;
+  if (!cfg.projectPath) {
+    setFieldError('projectPath', 'Project path is required');
+    toast('Project Path is required', 'error');
+    valid = false;
+  }
+  if (cfg.agent === 'copilot' && !cfg.ghToken) {
+    setFieldError('ghToken', 'GitHub Token is required for Copilot agent');
+    toast('GitHub Token is required for Copilot agent', 'error');
+    valid = false;
+  }
+  if (cfg.agent === 'claude' && !cfg.anthropicApiKey) {
+    setFieldError('anthropicApiKey', 'Anthropic API Key is required for Claude agent');
+    toast('Anthropic API Key is required', 'error');
+    valid = false;
+  }
+  if (cfg.agent === 'gemini' && !cfg.geminiApiKey) {
+    setFieldError('geminiApiKey', 'Gemini API Key is required for Gemini agent');
+    toast('Gemini API Key is required', 'error');
+    valid = false;
+  }
+  if (cfg.agent === 'aider' && !cfg.anthropicApiKey && !cfg.openaiApiKey && !cfg.geminiApiKey) {
+    toast('At least one API key is required for Aider', 'error');
+    valid = false;
+  }
+  return valid ? cfg : null;
 }
 
 // ── Persistence (localStorage) ────────────────────────────────────────────────
@@ -240,7 +362,9 @@ function validateConfig() {
 const STORAGE_KEY = 'copilot-agent-ui-config';
 
 const FORM_FIELDS = [
-  'projectPath','ghToken','task','taskFile',
+  'agent','projectPath','ghToken','anthropicApiKey','geminiApiKey',
+  'openaiApiKey','anthropicApiKey2','geminiApiKey2','aiderModel',
+  'task','taskFile',
   'instructionsRepo','instructionsFile','instructionsBranch',
   'gitUserName','gitUserEmail','flutterVersion','goVersion',
   'firebaseProjectId','gcloudKeyFile','firebaseTestDevice',
@@ -273,10 +397,10 @@ function loadForm() {
   } catch (_) {}
 }
 
-// Auto-save on any input change
+// Auto-save on any input change; hide setup hint once user starts
 document.querySelectorAll('.input-field, input[type="checkbox"]').forEach(el => {
-  el.addEventListener('change', saveForm);
-  el.addEventListener('input',  saveForm);
+  el.addEventListener('change', () => { saveForm(); checkSetupHint(); });
+  el.addEventListener('input',  () => { saveForm(); checkSetupHint(); });
 });
 
 // ── Container list ────────────────────────────────────────────────────────────
@@ -293,6 +417,7 @@ function renderContainerList(containers) {
   if (!containers || containers.length === 0) {
     sel.innerHTML = '<option value="">— no running containers —</option>';
     $('containerInfo').classList.add('hidden');
+    $('switchAgentBar').classList.add('hidden');
     return;
   }
 
@@ -300,6 +425,7 @@ function renderContainerList(containers) {
   containers.forEach(c => {
     const opt  = document.createElement('option');
     opt.value  = c.id;
+    opt.dataset.agent = c.agent || 'copilot';
     opt.textContent = `${c.name}  [${c.mode}]  ${c.project}`;
     sel.appendChild(opt);
   });
@@ -311,22 +437,44 @@ function renderContainerList(containers) {
 }
 
 function showContainerInfo(c) {
-  if (!c) { $('containerInfo').classList.add('hidden'); return; }
+  if (!c) {
+    $('containerInfo').classList.add('hidden');
+    $('switchAgentBar').classList.add('hidden');
+    return;
+  }
   const stateClass = c.state === 'running' ? 'ci-running' : 'ci-exited';
   const modeClass  = c.mode === 'plan' ? 'ci-plan' : '';
+  const agentInfo  = AGENT_INFO[c.agent] || { name: c.agent || 'copilot' };
   $('containerInfo').innerHTML =
     `<span class="ci-name">${c.name}</span>  ` +
     `<span class="ci-badge ${stateClass}">${c.state}</span>  ` +
     (c.mode !== 'normal' ? `<span class="ci-badge ${modeClass}">${c.mode}</span>  ` : '') +
+    `<span class="ci-badge" style="background:var(--surface);border:1px solid var(--border)">${agentInfo.name}</span>` +
     `<br>${c.status}`;
   $('containerInfo').classList.remove('hidden');
+
+  // Sync agent dropdown to match this container's agent
+  if (c.agent && $('agent').value !== c.agent) {
+    $('agent').value = c.agent;
+    updateAgentFields(c.agent);
+  }
+
+  // Show switch-agent bar
+  $('switchAgentSelect').value = c.agent || 'copilot';
+  $('switchAgentBar').classList.remove('hidden');
 }
 
 $('containerSelect').addEventListener('change', ev => {
   const id = ev.target.value;
-  if (!id) { $('containerInfo').classList.add('hidden'); return; }
-  // Find container info from options text (stored in previous render)
-  showContainerInfo({ id, state: 'running', mode: 'normal', name: id.slice(0, 12), status: '' });
+  if (!id) {
+    $('containerInfo').classList.add('hidden');
+    $('switchAgentBar').classList.add('hidden');
+    return;
+  }
+  // Get agent from option data attribute
+  const opt = ev.target.options[ev.target.selectedIndex];
+  const agent = opt?.dataset?.agent || 'copilot';
+  showContainerInfo({ id, state: 'running', mode: 'normal', name: id.slice(0, 12), status: '', agent });
 
   // Attach log stream
   if (state === 'idle' || state === 'plan_done') {
@@ -583,7 +731,37 @@ $('clearFormBtn').addEventListener('click', () => {
   try { localStorage.removeItem(STORAGE_KEY); } catch (_) {}
   FORM_FIELDS.forEach(id => { const el = $(id); if (el) el.value = ''; });
   $('useHostInstructions').checked = true;
+  $('agent').value = 'copilot';
+  updateAgentFields('copilot');
+  clearFieldErrors();
+  checkSetupHint();
   toast('Form cleared', 'info');
+});
+
+// ── Agent selector: show/hide per-agent fields + card ─────────────────────────
+function updateAgentFields(agent) {
+  document.querySelectorAll('.agent-fields').forEach(el => el.style.display = 'none');
+  const active = document.getElementById('agentFields-' + agent);
+  if (active) active.style.display = '';
+  renderAgentCard(agent);
+}
+
+$('agent').addEventListener('change', () => {
+  updateAgentFields($('agent').value);
+  saveForm();
+});
+
+// ── Switch Agent button ────────────────────────────────────────────────────────
+$('switchAgentBtn').addEventListener('click', () => {
+  const newAgent = $('switchAgentSelect').value;
+  $('agent').value = newAgent;
+  updateAgentFields(newAgent);
+  saveForm();
+  const info = AGENT_INFO[newAgent] || { name: newAgent };
+  toast(`Agent switched to ${info.name} — update API key if needed, then click ▶ Start`, 'info');
+  // Scroll config into view
+  $('agent').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  $('agent').focus();
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -719,6 +897,8 @@ if (isElectron) {
 // ── Init ──────────────────────────────────────────────────────────────────────
 
 loadForm();
+checkSetupHint();
+updateAgentFields($('agent').value);
 updateButtons();
 updateTerminalTitle();
 connectWS();

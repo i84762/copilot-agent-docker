@@ -335,6 +335,80 @@ footer#statusBar {
 .btn-icon:hover { background: var(--border); color: var(--text); }
 .browse-btn { align-self: flex-end; }
 
+/* ── Field help text ───────────────────────────────────────────────────────── */
+.field-help {
+  font-size: 10px;
+  color: var(--text-dim);
+  line-height: 1.5;
+  margin: 3px 0 0 1px;
+}
+.field-help code {
+  color: var(--blue);
+  font-family: var(--mono);
+  font-size: 10px;
+  background: rgba(56,139,253,0.08);
+  padding: 0 3px;
+  border-radius: 2px;
+}
+.help-link {
+  color: var(--blue);
+  text-decoration: none;
+  font-size: 10px;
+}
+.help-link:hover { text-decoration: underline; }
+.field-optional { color: var(--text-dim); font-weight: normal; }
+
+/* ── Setup hint (first-time onboarding) ────────────────────────────────────── */
+.setup-hint {
+  background: rgba(210, 153, 34, 0.08);
+  border: 1px solid rgba(210, 153, 34, 0.25);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.7;
+  margin-bottom: 10px;
+}
+.setup-hint strong { color: var(--orange); }
+
+/* ── Agent info card ───────────────────────────────────────────────────────── */
+.agent-card {
+  margin-top: 6px;
+  padding: 8px 10px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--purple);
+  border-radius: var(--radius);
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.6;
+  display: none;
+}
+.agent-card.visible { display: block; }
+.agent-card strong { color: var(--text); }
+.agent-card a { color: var(--blue); text-decoration: none; font-size: 10px; }
+.agent-card a:hover { text-decoration: underline; }
+
+/* ── Input error state ─────────────────────────────────────────────────────── */
+.input-field.field-invalid { border-color: var(--red); }
+.field-error-msg { font-size: 10px; color: var(--red); margin: 2px 0 0 1px; display: none; }
+.field-error-msg.visible { display: block; }
+
+/* ── Switch agent bar ──────────────────────────────────────────────────────── */
+.switch-agent-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 6px 8px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.switch-agent-bar.hidden { display: none; }
+.switch-agent-label { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+.input-field-xs { font-size: 11px; padding: 3px 6px; height: 24px; }
+
 /* ── Modal ─────────────────────────────────────────────────────────────────── */
 .modal {
   position: fixed;

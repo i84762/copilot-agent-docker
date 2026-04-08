@@ -52,11 +52,56 @@ You never need to pass `-Task` if one of the auto-discovered files exists.
 
 ---
 
+## Supported Agents
+
+The container supports four AI coding agents. Select one via `-Agent` flag or `AGENT` env var:
+
+| Agent | `-Agent` value | Required Key | Notes |
+|-------|---------------|-------------|-------|
+| **GitHub Copilot CLI** | `copilot` *(default)* | `GH_TOKEN` | Requires GitHub Copilot subscription |
+| **Claude Code** | `claude` | `ANTHROPIC_API_KEY` | Anthropic API key from console.anthropic.com |
+| **Gemini CLI** | `gemini` | `GEMINI_API_KEY` | Google AI API key from aistudio.google.com |
+| **Aider** | `aider` | One of the above | Auto-detects model from available keys |
+
+```powershell
+# GitHub Copilot (default)
+.\run-copilot.ps1 -ProjectPath "D:\Code\my-app" -Task "Add unit tests"
+
+# Claude Code
+.\run-copilot.ps1 -Agent claude -ProjectPath "D:\Code\my-app" `
+    -AnthropicApiKey "sk-ant-..." -Task "Refactor auth module"
+
+# Gemini CLI
+.\run-copilot.ps1 -Agent gemini -ProjectPath "D:\Code\my-app" `
+    -GeminiApiKey "AIza..." -Task "Fix all lint warnings"
+
+# Aider with OpenAI
+.\run-copilot.ps1 -Agent aider -ProjectPath "D:\Code\my-app" `
+    -OpenAiApiKey "sk-..." -AiderModel "gpt-4o" -Task "Implement dark mode"
+
+# Aider with Claude (auto-detects if ANTHROPIC_API_KEY is set)
+.\run-copilot.ps1 -Agent aider -ProjectPath "D:\Code\my-app" `
+    -AnthropicApiKey "sk-ant-..." -Task "Add i18n support"
+```
+
+---
+
 ## All Flags
 
 ```
 .\run-copilot.ps1 [flags]
 ```
+
+### Agent
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `-Agent` | string | `copilot` | Which agent to run: `copilot`, `claude`, `gemini`, `aider` |
+| `-GhToken` | string | `$env:GH_TOKEN` | GitHub PAT — required for `copilot`; optional for others |
+| `-AnthropicApiKey` | string | `$env:ANTHROPIC_API_KEY` | Required for `claude`; used by `aider` with Claude models |
+| `-GeminiApiKey` | string | `$env:GEMINI_API_KEY` | Required for `gemini`; used by `aider` with Gemini models |
+| `-OpenAiApiKey` | string | `$env:OPENAI_API_KEY` | Used by `aider` with OpenAI models |
+| `-AiderModel` | string | auto-detect | Aider model override (e.g. `gpt-4o`, `claude-3-5-sonnet-20241022`) |
 
 ### Required
 

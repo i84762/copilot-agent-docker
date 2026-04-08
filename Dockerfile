@@ -20,8 +20,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install Copilot CLI
 RUN curl -fsSL https://gh.io/copilot-install | bash
 
-# Install pexpect for Python-based automation
-RUN pip3 install pexpect --quiet
+# Install Claude Code CLI (Anthropic)
+RUN npm install -g @anthropic-ai/claude-code --quiet
+
+# Install Gemini CLI (Google)
+RUN npm install -g @google/gemini-cli --quiet
+
+# Install Aider (multi-model coding agent)
+RUN pip3 install aider-chat --quiet
 
 # Install Google Cloud SDK (gcloud) for Firebase Test Lab
 RUN curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
@@ -45,21 +51,26 @@ WORKDIR /workspace
 
 COPY scripts/entrypoint.sh         /usr/local/bin/entrypoint.sh
 COPY scripts/detect-and-install.sh /usr/local/bin/detect-and-install.sh
-COPY scripts/launch-copilot.sh     /usr/local/bin/launch-copilot.sh
+COPY scripts/launch-copilot.sh     /usr/local/bin/launch-agent.sh
 COPY scripts/setup-firebase.sh     /usr/local/bin/setup-firebase.sh
 COPY scripts/generate-report.sh    /usr/local/bin/generate-report.sh
 COPY scripts/session-state.sh      /usr/local/bin/session-state.sh
 COPY scripts/plan-mode.sh          /usr/local/bin/plan-mode.sh
 COPY scripts/resume-session.sh     /usr/local/bin/resume-session.sh
+COPY scripts/agents/               /usr/local/bin/agents/
 
 RUN chmod +x \
     /usr/local/bin/entrypoint.sh \
     /usr/local/bin/detect-and-install.sh \
-    /usr/local/bin/launch-copilot.sh \
+    /usr/local/bin/launch-agent.sh \
     /usr/local/bin/setup-firebase.sh \
     /usr/local/bin/generate-report.sh \
     /usr/local/bin/session-state.sh \
     /usr/local/bin/plan-mode.sh \
-    /usr/local/bin/resume-session.sh
+    /usr/local/bin/resume-session.sh \
+    /usr/local/bin/agents/copilot.sh \
+    /usr/local/bin/agents/claude.sh \
+    /usr/local/bin/agents/gemini.sh \
+    /usr/local/bin/agents/aider.sh
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

@@ -1,12 +1,15 @@
 <#
 .SYNOPSIS
-    Run the Copilot Agent Docker container on any local project folder.
+    Run an AI coding agent in a Docker container on any local project folder.
 
 .DESCRIPTION
     Builds (once) and runs the copilot-agent container, mounting your
-    project folder into /workspace. Copilot CLI auto-detects the project
-    type, installs the right SDK, fetches your global instructions, reads
-    the task, and works autonomously in autopilot mode.
+    project folder into /workspace. Supports multiple AI agents:
+    GitHub Copilot CLI, Claude Code, Gemini CLI, and Aider.
+
+.PARAMETER Agent
+    Which AI agent to use: copilot (default), claude, gemini, aider
+    Example: -Agent claude
 
 .PARAMETER ProjectPath
     Full path to your project folder on Windows.
@@ -14,18 +17,28 @@
 
 .PARAMETER Task
     Inline task string. Overrides any TASK.md in the project.
-    Example: -Task "Implement user auth, add unit tests, and push a PR"
 
 .PARAMETER TaskFile
     Path to a task file (inside the project folder or absolute).
-    Example: -TaskFile "D:\Code\my-flutter-app\TASK.md"
-
-.PARAMETER InstructionsRepo
-    GitHub repo containing your global copilot-instructions.md.
-    Format: "owner/repo"  Example: -InstructionsRepo "acme/my-copilot-config"
 
 .PARAMETER GhToken
-    GitHub PAT. Falls back to $env:GH_TOKEN if not provided.
+    GitHub PAT. Required for copilot; optional for others. Falls back to $env:GH_TOKEN.
+
+.PARAMETER AnthropicApiKey
+    Anthropic API key. Required for claude agent (and aider with Claude models).
+
+.PARAMETER GeminiApiKey
+    Google Gemini API key. Required for gemini agent (and aider with Gemini models).
+
+.PARAMETER OpenAiApiKey
+    OpenAI API key. Required for aider with OpenAI models.
+
+.PARAMETER AiderModel
+    Model for Aider (e.g. gpt-4o, claude-3-5-sonnet-20241022, gemini/gemini-1.5-pro).
+    Auto-detected from available API keys if not set.
+
+.PARAMETER InstructionsRepo
+    GitHub repo containing your global instructions. Format: "owner/repo"
 
 .PARAMETER Rebuild
     Force a Docker image rebuild.
@@ -34,21 +47,34 @@
     .\run-copilot.ps1 -ProjectPath "D:\Code\my-app" -Task "Fix all failing tests"
 
 .EXAMPLE
-    .\run-copilot.ps1 -ProjectPath "D:\Code\my-flutter-app" `
-        -InstructionsRepo "myuser/copilot-instructions" `
-        -GhToken "ghp_xxxx"
+    .\run-copilot.ps1 -Agent claude -ProjectPath "D:\Code\my-app" `
+        -AnthropicApiKey "sk-ant-xxxx" -Task "Add unit tests"
+
+.EXAMPLE
+    .\run-copilot.ps1 -Agent aider -ProjectPath "D:\Code\my-app" `
+        -OpenAiApiKey "sk-xxxx" -AiderModel "gpt-4o" -Task "Refactor auth module"
 #>
 
 param(
+    [ValidateSet('copilot','claude','gemini','aider')]
+    [string]$Agent       = "copilot",
+
     [Parameter(Mandatory = $true)]
     [string]$ProjectPath,
 
     [string]$Task        = "",
     [string]$TaskFile    = "",
+
+    # Per-agent API keys
+    [string]$GhToken           = $env:GH_TOKEN,
+    [string]$AnthropicApiKey   = $env:ANTHROPIC_API_KEY,
+    [string]$GeminiApiKey      = $env:GEMINI_API_KEY,
+    [string]$OpenAiApiKey      = $env:OPENAI_API_KEY,
+    [string]$AiderModel        = $env:AIDER_MODEL,
+
     [string]$InstructionsRepo  = $env:COPILOT_INSTRUCTIONS_REPO,
     [string]$InstructionsFile  = "copilot-instructions.md",
     [string]$InstructionsBranch = "main",
-    [string]$GhToken     = $env:GH_TOKEN,
     [string]$GitUserName = $env:GIT_USER_NAME,
     [string]$GitUserEmail = $env:GIT_USER_EMAIL,
     [string]$FlutterVersion = "3.24.5",
@@ -62,10 +88,10 @@ param(
     [string]$FirebaseTestTimeout   = $env:FIREBASE_TEST_TIMEOUT,
 
     # Mode flags
-    [switch]$Plan,          # Run interactive planning session first
-    [switch]$Resume,        # Force resume of last session (even if marked complete)
-    [switch]$NewSession,    # Discard all saved state and start completely fresh
-    [switch]$NoHostInstructions,  # Skip reading ~/.copilot/copilot-instructions.md from this machine
+    [switch]$Plan,
+    [switch]$Resume,
+    [switch]$NewSession,
+    [switch]$NoHostInstructions,
 
     [switch]$Rebuild
 )
@@ -78,8 +104,8 @@ if (-not (Test-Path $ProjectPath)) {
     Write-Error "ProjectPath does not exist: $ProjectPath"
     exit 1
 }
-if (-not $GhToken) {
-    Write-Error "GH_TOKEN not set. Pass -GhToken or set the env var."
+if (-not $GhToken -and $Agent -eq "copilot") {
+    Write-Error "GH_TOKEN not set. Pass -GhToken or set the env var (required for the copilot agent)."
     exit 1
 }
 
@@ -123,8 +149,13 @@ $env:HOST_COPILOT_HOME = $HostCopilotHome
 $env:COPILOT_USE_HOST_INSTRUCTIONS = if ($NoHostInstructions) { "false" } else { "true" }
 
 # ── Compose env ──────────────────────────────────────────────
+$env:AGENT                     = $Agent
 $env:PROJECT_PATH              = $ProjectPath
 $env:GH_TOKEN                  = $GhToken
+$env:ANTHROPIC_API_KEY         = $AnthropicApiKey
+$env:GEMINI_API_KEY            = $GeminiApiKey
+$env:OPENAI_API_KEY            = $OpenAiApiKey
+$env:AIDER_MODEL               = $AiderModel
 $env:COPILOT_TASK              = $Task
 $env:COPILOT_TASK_FILE         = $ContainerTaskFile
 $env:COPILOT_INSTRUCTIONS_REPO = $InstructionsRepo
@@ -158,6 +189,7 @@ if ($GcloudKeyFile -and (Test-Path $GcloudKeyFile)) {
 Write-Host ""
 Write-Host "══════════════════════════════════════════════" -ForegroundColor DarkCyan
 Write-Host "  Copilot Agent Container" -ForegroundColor Cyan
+Write-Host "  Agent   : $Agent" -ForegroundColor White
 
 # ── Show mode ─────────────────────────────────────────────────
 if ($Plan) {

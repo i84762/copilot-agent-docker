@@ -71,7 +71,17 @@ function broadcast(obj) {
 // Build Docker env array from UI config object
 function buildEnv(cfg, mode) {
   const pairs = {
+    // ── Agent selection ──────────────────────────────────────
+    AGENT:                        cfg.agent || 'copilot',
+
+    // ── Per-agent API keys ───────────────────────────────────
     GH_TOKEN:                     cfg.ghToken || '',
+    ANTHROPIC_API_KEY:            cfg.anthropicApiKey || '',
+    GEMINI_API_KEY:               cfg.geminiApiKey || '',
+    OPENAI_API_KEY:               cfg.openaiApiKey || '',
+    AIDER_MODEL:                  cfg.aiderModel || '',
+
+    // ── Task / instructions ──────────────────────────────────
     COPILOT_TASK:                 cfg.task || '',
     COPILOT_TASK_FILE:            cfg.taskFile || '',
     COPILOT_INSTRUCTIONS_REPO:    cfg.instructionsRepo || '',
@@ -141,9 +151,10 @@ async function createAndStart(cfg, mode) {
       AutoRemove: false,
     },
     Labels: {
-      'copilot-agent':   'true',
-      'copilot-mode':    mode,
-      'copilot-project': cfg.projectPath ? path.basename(cfg.projectPath) : 'unknown',
+      'copilot-agent':      'true',
+      'copilot-mode':       mode,
+      'copilot-project':    cfg.projectPath ? path.basename(cfg.projectPath) : 'unknown',
+      'copilot-agent-type': cfg.agent || 'copilot',
     },
   });
 
@@ -158,8 +169,9 @@ function containerSummary(c) {
     name:    (c.Names[0] || c.Id).replace(/^\//, ''),
     status:  c.Status,
     state:   c.State,
-    mode:    c.Labels?.['copilot-mode'] || 'normal',
+    mode:    c.Labels?.['copilot-mode']    || 'normal',
     project: c.Labels?.['copilot-project'] || '—',
+    agent:   c.Labels?.['copilot-agent-type'] || 'copilot',
     image:   c.Image,
   };
 }

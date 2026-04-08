@@ -39,6 +39,16 @@
         <option value="">— no running containers —</option>
       </select>
       <div id="containerInfo" class="container-info hidden"></div>
+      <div id="switchAgentBar" class="switch-agent-bar hidden">
+        <span class="switch-agent-label">Switch agent:</span>
+        <select id="switchAgentSelect" class="input-field input-field-xs">
+          <option value="copilot">Copilot</option>
+          <option value="claude">Claude</option>
+          <option value="gemini">Gemini</option>
+          <option value="aider">Aider</option>
+        </select>
+        <button id="switchAgentBtn" class="btn btn-ghost btn-xs" title="Apply agent to config and start new session">Apply</button>
+      </div>
     </section>
 
     <!-- Configuration form -->
@@ -48,17 +58,87 @@
         <button id="clearFormBtn" class="btn btn-ghost btn-xs" title="Clear saved form">✕</button>
       </div>
 
+      <!-- First-time setup hint -->
+      <div id="setupHint" class="setup-hint hidden">
+        <strong>👋 Getting started</strong><br>
+        1. Enter your <strong>Project Path</strong><br>
+        2. Pick an <strong>Agent</strong> and add its API key<br>
+        3. Describe your <strong>Task</strong> or add a TASK.md to your project<br>
+        4. Click <strong>▶ Start</strong> (or <strong>🗺 Plan</strong> to review first)
+      </div>
+
       <label class="field-label">Project Path <span class="required">*</span></label>
       <input id="projectPath" type="text" class="input-field" placeholder="D:\Code\my-project">
+      <p class="field-help">Full path to your project folder on this machine. Docker will mount it as <code>/workspace</code>.</p>
 
-      <label class="field-label">GitHub Token <span class="required">*</span></label>
-      <input id="ghToken" type="password" class="input-field" placeholder="ghp_…" autocomplete="off">
+      <!-- Agent selector -->
+      <label class="field-label" style="margin-top:10px">Agent <span class="required">*</span></label>
+      <select id="agent" class="input-field">
+        <option value="copilot">GitHub Copilot CLI</option>
+        <option value="claude">Claude Code (Anthropic)</option>
+        <option value="gemini">Gemini CLI (Google)</option>
+        <option value="aider">Aider (multi-model)</option>
+      </select>
 
-      <label class="field-label">Task</label>
+      <!-- Agent info card -->
+      <div id="agentCard" class="agent-card"></div>
+
+      <!-- Copilot: GH Token -->
+      <div id="agentFields-copilot" class="agent-fields">
+        <label class="field-label">GitHub Token <span class="required">*</span></label>
+        <input id="ghToken" type="password" class="input-field" placeholder="ghp_…" autocomplete="off">
+        <p class="field-help">
+          Personal Access Token with <strong>Copilot</strong> + <strong>repo</strong> permissions.
+          <a href="https://github.com/settings/tokens/new?scopes=repo,copilot" target="_blank" class="help-link">Create token ↗</a>
+        </p>
+      </div>
+
+      <!-- Claude: Anthropic API Key -->
+      <div id="agentFields-claude" class="agent-fields" style="display:none">
+        <label class="field-label">Anthropic API Key <span class="required">*</span></label>
+        <input id="anthropicApiKey" type="password" class="input-field" placeholder="sk-ant-…" autocomplete="off">
+        <p class="field-help">
+          API key from Anthropic Console.
+          <a href="https://console.anthropic.com/settings/keys" target="_blank" class="help-link">Get key ↗</a>
+        </p>
+      </div>
+
+      <!-- Gemini: Google API Key -->
+      <div id="agentFields-gemini" class="agent-fields" style="display:none">
+        <label class="field-label">Gemini API Key <span class="required">*</span></label>
+        <input id="geminiApiKey" type="password" class="input-field" placeholder="AIza…" autocomplete="off">
+        <p class="field-help">
+          API key from Google AI Studio.
+          <a href="https://aistudio.google.com/app/apikey" target="_blank" class="help-link">Get key ↗</a>
+        </p>
+      </div>
+
+      <!-- Aider: flexible API key + model -->
+      <div id="agentFields-aider" class="agent-fields" style="display:none">
+        <p class="field-help" style="margin-top:2px">Provide at least one API key. Model is auto-detected.</p>
+        <label class="field-label">OpenAI API Key</label>
+        <input id="openaiApiKey" type="password" class="input-field" placeholder="sk-…" autocomplete="off">
+        <label class="field-label">Anthropic API Key</label>
+        <input id="anthropicApiKey2" type="password" class="input-field" placeholder="sk-ant-…" autocomplete="off">
+        <label class="field-label">Gemini API Key</label>
+        <input id="geminiApiKey2" type="password" class="input-field" placeholder="AIza…" autocomplete="off">
+        <label class="field-label">Model override <span class="field-optional">(optional)</span></label>
+        <input id="aiderModel" type="text" class="input-field" placeholder="gpt-4o · claude-3-5-sonnet-20241022 · gemini/gemini-1.5-pro">
+        <p class="field-help">
+          <a href="https://aider.chat/docs/llms.html" target="_blank" class="help-link">See all supported models ↗</a>
+        </p>
+      </div>
+
+      <label class="field-label" style="margin-top:10px">Task</label>
       <textarea id="task" class="input-field textarea" rows="3" placeholder="Describe what the agent should do…&#10;(or leave blank to read from TASK.md in project root)"></textarea>
+      <p class="field-help">
+        Inline task description. Leave blank to auto-read from
+        <code>TASK.md</code>, <code>GOALS.md</code>, or <code>.copilot-task.md</code> in your project root.
+      </p>
 
-      <label class="field-label">Task File (optional)</label>
+      <label class="field-label">Task File <span class="field-optional">(optional)</span></label>
       <input id="taskFile" type="text" class="input-field" placeholder="/workspace/SPRINT.md">
+      <p class="field-help">Container path to a task file, e.g. <code>/workspace/SPRINT.md</code>. Overrides the inline task above.</p>
 
       <!-- Collapsible: Instructions -->
       <details class="collapsible">
