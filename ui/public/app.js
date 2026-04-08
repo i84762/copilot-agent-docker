@@ -629,6 +629,93 @@ const termResizeObs = new ResizeObserver(() => {
 });
 termResizeObs.observe(document.getElementById('terminal'));
 
+// ── Electron integration ──────────────────────────────────────────────────────
+
+const isElectron = !!(window.electronAPI?.isElectron);
+
+if (isElectron) {
+  // Show Electron badge in header
+  const badge = document.createElement('span');
+  badge.textContent = '⚡ App';
+  badge.className   = 'badge badge-electron';
+  badge.title       = 'Running as native Electron app';
+  document.querySelector('.header-right')?.prepend(badge);
+
+  // Wire native folder picker to project path field
+  const projectInput = $('projectPath');
+  if (projectInput) {
+    const browseBtn = document.createElement('button');
+    browseBtn.textContent = '📁';
+    browseBtn.title       = 'Browse for project folder';
+    browseBtn.className   = 'btn btn-icon browse-btn';
+    browseBtn.type        = 'button';
+    browseBtn.addEventListener('click', async () => {
+      const folder = await window.electronAPI.selectDirectory();
+      if (folder) {
+        projectInput.value = folder;
+        saveForm();
+      }
+    });
+    projectInput.parentNode.style.display = 'flex';
+    projectInput.parentNode.style.gap     = '6px';
+    projectInput.parentNode.insertBefore(browseBtn, projectInput.nextSibling);
+  }
+
+  // Wire native file picker to task file field
+  const taskFileInput = $('taskFile');
+  if (taskFileInput) {
+    const browseTaskBtn = document.createElement('button');
+    browseTaskBtn.textContent = '📄';
+    browseTaskBtn.title       = 'Browse for task file';
+    browseTaskBtn.className   = 'btn btn-icon browse-btn';
+    browseTaskBtn.type        = 'button';
+    browseTaskBtn.addEventListener('click', async () => {
+      const file = await window.electronAPI.selectFile([
+        { name: 'Markdown / Text', extensions: ['md', 'txt', 'task'] },
+        { name: 'All Files', extensions: ['*'] },
+      ]);
+      if (file) {
+        taskFileInput.value = file;
+        saveForm();
+      }
+    });
+    taskFileInput.parentNode.style.display = 'flex';
+    taskFileInput.parentNode.style.gap     = '6px';
+    taskFileInput.parentNode.insertBefore(browseTaskBtn, taskFileInput.nextSibling);
+  }
+
+  // Wire native file picker to SA key file field
+  const keyFileInput = $('gcloudKeyFile');
+  if (keyFileInput) {
+    const browseKeyBtn = document.createElement('button');
+    browseKeyBtn.textContent = '🔑';
+    browseKeyBtn.title       = 'Browse for service account key';
+    browseKeyBtn.className   = 'btn btn-icon browse-btn';
+    browseKeyBtn.type        = 'button';
+    browseKeyBtn.addEventListener('click', async () => {
+      const file = await window.electronAPI.selectFile([
+        { name: 'JSON Key', extensions: ['json'] },
+      ]);
+      if (file) {
+        keyFileInput.value = file;
+        saveForm();
+      }
+    });
+    keyFileInput.parentNode.style.display = 'flex';
+    keyFileInput.parentNode.style.gap     = '6px';
+    keyFileInput.parentNode.insertBefore(browseKeyBtn, keyFileInput.nextSibling);
+  }
+
+  // Handle File > Open Project Folder… menu item
+  window.electronAPI.onOpenProject(folder => {
+    if (folder && $('projectPath')) {
+      $('projectPath').value = folder;
+      saveForm();
+      toast(`Project set: ${folder}`, 'info');
+    }
+  });
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 
 loadForm();

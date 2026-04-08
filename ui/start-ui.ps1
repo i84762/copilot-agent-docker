@@ -1,21 +1,27 @@
 <#
 .SYNOPSIS
-    Start the Copilot Agent web UI.
+    Start the Copilot Agent UI — as an Electron desktop app or in a browser.
+
+.PARAMETER Mode
+    Launch mode: 'electron' (default on Windows) or 'browser' (opens in your default browser).
 
 .PARAMETER Port
-    Port to listen on (default: 3000)
+    Port for the embedded Express server (default: 3000).
 
 .PARAMETER NoBrowser
-    Don't auto-open the browser.
+    Browser mode only: don't auto-open a browser tab.
 
 .EXAMPLE
-    .\start-ui.ps1
-    .\start-ui.ps1 -Port 8080
-    .\start-ui.ps1 -NoBrowser
+    .\start-ui.ps1                        # Electron app (default)
+    .\start-ui.ps1 -Mode browser          # Browser at http://localhost:3000
+    .\start-ui.ps1 -Mode browser -Port 8080
+    .\start-ui.ps1 -Mode electron         # Explicit Electron
 #>
 param(
-    [int]   $Port      = 3000,
-    [switch]$NoBrowser
+    [ValidateSet('electron','browser')]
+    [string] $Mode      = 'electron',
+    [int]    $Port      = 3000,
+    [switch] $NoBrowser                   # browser mode only
 )
 
 $ErrorActionPreference = 'Stop'
@@ -26,6 +32,7 @@ Write-Host "╔═════════════════════�
 Write-Host "║      Copilot Agent UI Launcher         ║" -ForegroundColor Cyan
 Write-Host "╚════════════════════════════════════════╝" -ForegroundColor Cyan
 Write-Host ""
+Write-Host "  Mode     : $Mode" -ForegroundColor White
 
 # ── Node.js check ──────────────────────────────────────────────────────────────
 try {
@@ -60,29 +67,40 @@ if (-not (Test-Path $nodeModules)) {
     Write-Host "  Dependencies installed ✓" -ForegroundColor Green
 }
 
-# ── Start server ───────────────────────────────────────────────────────────────
-$url = "http://localhost:$Port"
-Write-Host ""
-Write-Host "  URL      : $url" -ForegroundColor White
-Write-Host "  SSH tunnel: ssh -L ${Port}:localhost:${Port} user@remote-host" -ForegroundColor DarkCyan
-Write-Host ""
-Write-Host "  Press Ctrl+C to stop." -ForegroundColor DarkGray
-Write-Host ""
-
 $env:UI_PORT = $Port
-
-if (-not $NoBrowser) {
-    # Open browser after a short delay (let server start first)
-    Start-Job -ScriptBlock {
-        param($u)
-        Start-Sleep -Seconds 1.5
-        Start-Process $u
-    } -ArgumentList $url | Out-Null
-}
-
 Push-Location $UiDir
-try {
-    node server.js
-} finally {
-    Pop-Location
+
+# ── Launch ─────────────────────────────────────────────────────────────────────
+if ($Mode -eq 'electron') {
+    Write-Host ""
+    Write-Host "  Launching Electron app..." -ForegroundColor Cyan
+    Write-Host "  (Close the window or press Ctrl+C to stop)" -ForegroundColor DarkGray
+    Write-Host ""
+    try {
+        npx electron .
+    } finally {
+        Pop-Location
+    }
+} else {
+    $url = "http://localhost:$Port"
+    Write-Host ""
+    Write-Host "  URL       : $url" -ForegroundColor White
+    Write-Host "  SSH tunnel: ssh -L ${Port}:localhost:${Port} user@remote-host" -ForegroundColor DarkCyan
+    Write-Host ""
+    Write-Host "  Press Ctrl+C to stop." -ForegroundColor DarkGray
+    Write-Host ""
+
+    if (-not $NoBrowser) {
+        Start-Job -ScriptBlock {
+            param($u)
+            Start-Sleep -Seconds 1.5
+            Start-Process $u
+        } -ArgumentList $url | Out-Null
+    }
+
+    try {
+        node server.js
+    } finally {
+        Pop-Location
+    }
 }

@@ -327,7 +327,13 @@ footer#statusBar {
 .badge-offline { background: #1e1610; color: var(--yellow); }
 .badge-error   { background: #2a1010; color: var(--red); }
 .badge-ok      { background: #0f2c1f; color: var(--green); }
-.badge-missing { background: #1e1610; color: var(--yellow); }
+.badge-missing   { background: #1e1610; color: var(--yellow); }
+.badge-electron  { background: #1a1040; color: #a371f7; border: 1px solid #3d1f7a; }
+
+/* Browse buttons (Electron native file picker) */
+.btn-icon { padding: 5px 8px; font-size: 13px; line-height: 1; flex-shrink: 0; background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text-muted); cursor: pointer; transition: background 0.15s, color 0.15s; }
+.btn-icon:hover { background: var(--border); color: var(--text); }
+.browse-btn { align-self: flex-end; }
 
 /* ── Modal ─────────────────────────────────────────────────────────────────── */
 .modal {
@@ -463,3 +469,4 @@ footer#statusBar {
 #toast.toast-error   { border-color: var(--red);    color: var(--red); }
 #toast.toast-success { border-color: var(--green);  color: var(--green); }
 #toast.toast-info    { border-color: var(--blue);   color: var(--blue); }
+

@@ -1,0 +1,50 @@
+appId: com.copilot.agent.docker
+productName: Copilot Agent
+copyright: "Copyright © 2024"
+
+directories:
+  buildResources: electron/build
+  output: dist
+
+files:
+  - "**/*"
+  - "!node_modules/.cache"
+  - "!dist"
+  - "!*.md"
+
+# Windows — NSIS installer
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: electron/build/icon.png
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  shortcutName: Copilot Agent
+
+# macOS — DMG
+mac:
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+  icon: electron/build/icon.png
+  category: public.app-category.developer-tools
+
+dmg:
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
+# Linux — AppImage
+linux:
+  target:
+    - target: AppImage
+      arch: [x64]
+  icon: electron/build/icons/
+  category: Development

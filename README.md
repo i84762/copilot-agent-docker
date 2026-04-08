@@ -311,47 +311,65 @@ Once set, push to `main` and the image will be published to:
 
 ## Web UI
 
-A browser-based interface to configure, launch, and monitor the agent — including a fully interactive terminal for plan sessions.
+A full interface to configure, launch, and monitor the agent — available as a **native Electron desktop app** (Windows/Mac/Linux) or as a **browser app** accessible remotely over SSH.
 
 ### Prerequisites
 
 - **Node.js 18+** — [Install](https://nodejs.org)
 
-### Start the UI
+### Launch
 
 ```powershell
 cd copilot-agent-docker\ui
-.\start-ui.ps1
-# Opens http://localhost:3000 automatically
 
-# Custom port:
-.\start-ui.ps1 -Port 8080
+# Electron desktop app (default on Windows)
+.\start-ui.ps1
+
+# Browser mode (Mac/Linux or for remote SSH access)
+.\start-ui.ps1 -Mode browser
+
+# Browser on a custom port
+.\start-ui.ps1 -Mode browser -Port 8080
 ```
 
-### What the UI provides
+On **Mac/Linux**:
+```bash
+npm start              # Electron app
+npm run start:browser  # Browser at http://localhost:3000
+```
+
+### Electron vs Browser
+
+| | Electron (Desktop) | Browser |
+|--|--|--|
+| **Platform** | Windows, Mac, Linux | Any browser |
+| **Native file picker** | ✅ Click 📁 to browse folders | ✗ Type paths manually |
+| **Remote access** | ✗ Local only | ✅ SSH tunnel or direct URL |
+| **No install** | ✗ Needs Node.js | ✅ Just open URL |
+| **Best for** | Local daily use | Remote servers / teams |
+
+### Features
 
 | Feature | Description |
 |---------|-------------|
-| **Configuration form** | All agent parameters with auto-save to browser localStorage |
+| **Configuration form** | All agent parameters with auto-save to localStorage |
 | **Container selector** | Dropdown of running copilot-agent containers; click to tail logs |
-| **Plan mode terminal** | Full interactive xterm.js terminal — talk to Copilot, it reads your code and asks questions |
-| **Execute Plan** | After planning, one click to run the agent autonomously on the created plan |
-| **Log streaming** | Live ANSI-coloured output from any running container |
+| **Plan mode terminal** | Interactive xterm.js terminal — talk to Copilot, it reads your code and asks questions |
+| **Execute Plan** | After planning, one click runs the agent autonomously on the plan |
+| **Live log streaming** | ANSI-coloured output from any running container |
 | **Build image** | Build the Docker image from the UI with streamed progress |
 | **Cancel / Abort** | Graceful stop (generates change report) or force kill |
 | **Remote Docker host** | Connect to a remote Docker host via SSH or TCP |
-| **Download logs** | Save the full terminal output as a `.log` file |
+| **Download logs** | Save full terminal output as a `.log` file |
 
 ### Remote access (SSH tunnel)
 
-Run the UI server on a remote machine and access it from your local browser:
+Run the UI in browser mode on a remote machine and access it locally:
 
 ```bash
-# On your local machine — forward remote port 3000 to localhost:3000
+# On your local machine
 ssh -L 3000:localhost:3000 user@remote-host
-
-# The remote UI server connects to the remote Docker daemon
-# Access in browser: http://localhost:3000
+# Then open: http://localhost:3000
 ```
 
 Or connect the UI directly to a remote Docker socket:
@@ -360,14 +378,23 @@ Or connect the UI directly to a remote Docker socket:
 2. Select **SSH** or **TCP**
 3. Enter host details and click **Connect**
 
+### Build distributable installers
+
+```powershell
+cd copilot-agent-docker\ui
+npm run build:win    # → dist/Copilot Agent Setup.exe
+npm run build:mac    # → dist/Copilot Agent.dmg
+npm run build:linux  # → dist/Copilot Agent.AppImage
+```
+
 ### Interactive Plan mode flow
 
-1. Fill in **Project Path** and **GitHub Token**  
-2. Enter your task (or leave blank to auto-read from `TASK.md`)  
-3. Click **🗺 Plan** — a container starts, the terminal becomes interactive  
-4. Copilot reads your code and task, then asks clarifying questions in the terminal  
-5. Reply in the terminal — Copilot refines the plan  
-6. When satisfied, click **▶ Execute Plan** — a new container runs the plan autonomously  
+1. Fill in **Project Path** and **GitHub Token**
+2. Enter your task (or leave blank to auto-read from `TASK.md`)
+3. Click **🗺 Plan** — a container starts, the terminal becomes interactive
+4. Copilot reads your code and task, then asks clarifying questions in the terminal
+5. Reply in the terminal — Copilot refines the plan
+6. When satisfied, click **▶ Execute Plan** — a new container runs the plan autonomously
 7. Monitor progress in the live log view; a change report appears in `.copilot-reports/`
 
 ---
@@ -381,13 +408,18 @@ copilot-agent-docker/
 ├── run-copilot.ps1                      # Windows CLI launcher
 ├── .env.example                         # Copy to .env for direct compose usage
 ├── .gitignore
-├── ui/                                  # Web UI (Node.js)
+├── ui/                                  # UI (Electron app + browser fallback)
 │   ├── server.js                        # Express + WebSocket backend
 │   ├── package.json
-│   ├── start-ui.ps1                     # Windows UI launcher
+│   ├── electron-builder.yml             # Installer build config
+│   ├── start-ui.ps1                     # Launcher (-Mode electron|browser)
+│   ├── electron/
+│   │   ├── main.js                      # Electron main process
+│   │   ├── preload.js                   # Context bridge (native dialogs)
+│   │   └── build/                       # Icons for installers
 │   └── public/
 │       ├── index.html                   # Single-page app
-│       ├── app.js                       # Frontend logic (xterm.js, WebSocket)
+│       ├── app.js                       # Frontend logic (xterm.js, WebSocket, Electron API)
 │       └── style.css                    # Dark GitHub theme
 ├── scripts/
 │   ├── entrypoint.sh                    # Startup: auth, SDK, mode routing
