@@ -60,6 +60,19 @@ COPY scripts/plan-mode.sh          /usr/local/bin/plan-mode.sh
 COPY scripts/resume-session.sh     /usr/local/bin/resume-session.sh
 COPY scripts/agents/               /usr/local/bin/agents/
 
+# Strip Windows CRLF line endings so shebangs work on Linux
+RUN apt-get update && apt-get install -y --no-install-recommends dos2unix \
+    && dos2unix /usr/local/bin/entrypoint.sh \
+               /usr/local/bin/detect-and-install.sh \
+               /usr/local/bin/launch-agent.sh \
+               /usr/local/bin/setup-firebase.sh \
+               /usr/local/bin/generate-report.sh \
+               /usr/local/bin/session-state.sh \
+               /usr/local/bin/plan-mode.sh \
+               /usr/local/bin/resume-session.sh \
+    && find /usr/local/bin/agents -name '*.sh' -exec dos2unix {} + \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN chmod +x \
     /usr/local/bin/entrypoint.sh \
     /usr/local/bin/detect-and-install.sh \
