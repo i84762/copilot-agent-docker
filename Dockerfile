@@ -48,12 +48,18 @@ COPY scripts/detect-and-install.sh /usr/local/bin/detect-and-install.sh
 COPY scripts/launch-copilot.sh     /usr/local/bin/launch-copilot.sh
 COPY scripts/setup-firebase.sh     /usr/local/bin/setup-firebase.sh
 COPY scripts/generate-report.sh    /usr/local/bin/generate-report.sh
+COPY scripts/session-state.sh      /usr/local/bin/session-state.sh
+COPY scripts/plan-mode.sh          /usr/local/bin/plan-mode.sh
+COPY scripts/resume-session.sh     /usr/local/bin/resume-session.sh
 
 RUN chmod +x \
     /usr/local/bin/entrypoint.sh \
     /usr/local/bin/detect-and-install.sh \
     /usr/local/bin/launch-copilot.sh \
     /usr/local/bin/setup-firebase.sh \
-    /usr/local/bin/generate-report.sh
+    /usr/local/bin/generate-report.sh \
+    /usr/local/bin/session-state.sh \
+    /usr/local/bin/plan-mode.sh \
+    /usr/local/bin/resume-session.sh
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

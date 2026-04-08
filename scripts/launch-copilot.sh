@@ -1,21 +1,24 @@
 #!/bin/bash
 # ============================================================
 # launch-copilot.sh — Start Copilot CLI in autopilot mode via tmux
+# Usage: launch-copilot.sh "<task>" [normal|resume|planned]
 # ============================================================
 
 TASK="$1"
+MODE="${2:-normal}"   # normal | resume | planned
 PROJECT_TYPE=$(cat /tmp/project_type 2>/dev/null || echo "unknown")
-export AGENT_SESSION_START=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-BOLD='\033[1m'; CYAN='\033[0;36m'; GREEN='\033[0;32m'; NC='\033[0m'
-log() { echo -e "${CYAN}[launch]${NC} $1"; }
-ok()  { echo -e "${GREEN}[✓]${NC} $1"; }
+BOLD='\033[1m'; CYAN='\033[0;36m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
+log()  { echo -e "${CYAN}[launch]${NC} $1"; }
+ok()   { echo -e "${GREEN}[✓]${NC} $1"; }
+warn() { echo -e "${YELLOW}[⚠]${NC} $1"; }
 
-# ── Write task to AGENTS.md-style file ──────────────────────
-# Copilot reads instructions from AGENTS.md in cwd / git root.
-# We write the task into a .copilot-agent-task.md and expose the
-# dir via COPILOT_CUSTOM_INSTRUCTIONS_DIRS so it is always loaded.
+source /usr/local/bin/session-state.sh
 
+# ── Save initial state ───────────────────────────────────────
+save_session_state "$TASK" "in_progress"
+
+# ── Build the task instructions block ───────────────────────
 TASK_INSTRUCTIONS="/tmp/copilot-task-instructions.md"
 
 cat > "$TASK_INSTRUCTIONS" << TASKINSTR
@@ -40,7 +43,7 @@ ${PROJECT_TYPE}
 
 ### Unit & Widget Tests (always run first — fast, no device needed)
 \`\`\`bash
-cd /workspace && flutter test
+cd /workspace && flutter test 2>&1 | tee /tmp/test-results.txt
 \`\`\`
 
 ### Device Tests via Firebase Test Lab
@@ -48,50 +51,22 @@ Firebase Test Lab is $([ "${FIREBASE_ENABLED:-false}" = "true" ] && echo "**ENAB
 $([ "${FIREBASE_ENABLED:-false}" = "true" ] && echo "Firebase project: \`${FIREBASE_PROJECT_ID}\`")
 $([ "${FIREBASE_ENABLED:-false}" = "true" ] && echo "Target device:    \`${FIREBASE_TEST_DEVICE}\`")
 
-A helper script is available at \`/usr/local/bin/ftl-test\`:
-
 \`\`\`bash
-# Run Flutter integration tests on Firebase Test Lab (real Android devices):
-ftl-test android
-
-# Run Robo (automated exploratory) test:
-ftl-test robo
-
-# Custom APK paths:
-ftl-test android path/to/app.apk path/to/test.apk
+ftl-test android 2>&1 | tee /tmp/firebase-results.txt
 \`\`\`
 
-**Testing order to follow:**
-1. Run \`flutter test\` (unit + widget) — fix any failures before proceeding
-2. If Firebase Test Lab is enabled, run \`ftl-test android\` for integration tests
-3. If Firebase Test Lab is disabled, document which integration tests need device access
-4. Never skip step 1 to jump straight to device tests
+**Testing order:** flutter test → ftl-test android (if enabled)
 
 ## Reporting — REQUIRED at task completion
 
-When **all tasks are done**, you MUST run the report generator before finishing:
-
+When all tasks are done, run:
 \`\`\`bash
 generate-report
 \`\`\`
 
-This writes a human-readable summary to \`/workspace/.copilot-reports/\` (visible on
-the host) containing:
-- A markdown summary of what was accomplished
-- Full diff of all code changes
-- Git commit log
-- Test results
-
-During the session, capture key notes using:
+Record notes during work:
 \`\`\`bash
-# Append a note (blockers, decisions, caveats):
-echo "your note here" >> /tmp/agent-notes.txt
-
-# After running flutter test, save the output:
-flutter test 2>&1 | tee /tmp/test-results.txt
-
-# After Firebase Test Lab, save the output:
-ftl-test android 2>&1 | tee /tmp/firebase-results.txt
+echo "your note" >> /tmp/agent-notes.txt
 \`\`\`
 
 ## Task / Goals
@@ -99,9 +74,24 @@ ftl-test android 2>&1 | tee /tmp/firebase-results.txt
 ${TASK}
 TASKINSTR
 
-# Merge with any globally fetched instructions
+# ── Merge with resume context if resuming ───────────────────
+INITIAL_PROMPT="$TASK"
+
+if [ "$MODE" = "resume" ] && [ -n "$RESUME_PROMPT" ]; then
+    INITIAL_PROMPT="$RESUME_PROMPT"
+    log "Using resume context as initial prompt"
+elif [ "$MODE" = "planned" ] && [ -f /workspace/PLAN.md ]; then
+    INITIAL_PROMPT="Execute the plan in PLAN.md completely and autonomously.
+
+$(cat /workspace/PLAN.md)
+
+Work through each milestone in order. Commit after each one. Run tests.
+When all milestones are done, run generate-report."
+    log "Using PLAN.md as initial prompt"
+fi
+
+# ── Merge with global instructions ──────────────────────────
 if [ -f /root/.copilot/copilot-instructions.md ]; then
-    # Prepend global instructions, then append task
     {
         cat /root/.copilot/copilot-instructions.md
         echo ""
@@ -114,56 +104,76 @@ fi
 
 ok "Instructions written to /root/.copilot/copilot-instructions.md"
 
-# ── Start Copilot CLI via tmux ───────────────────────────────
-# tmux gives us a proper PTY so Copilot renders correctly and
-# we can send key sequences programmatically.
-
+# ── Start Copilot via tmux ───────────────────────────────────
 TMUX_SESSION="copilot-agent"
-
-# Kill any stale session
 tmux kill-session -t "$TMUX_SESSION" 2>/dev/null || true
 
-log "Starting tmux session '${TMUX_SESSION}'..."
+log "Starting tmux session (mode=$MODE)..."
 tmux new-session -d -s "$TMUX_SESSION" -x 240 -y 50
 
-# Start Copilot CLI with --experimental (needed for autopilot mode)
 tmux send-keys -t "$TMUX_SESSION" \
     "export GH_TOKEN='${GH_TOKEN}'; cd /workspace && copilot --experimental" Enter
 
-# Wait for CLI banner/prompt to appear (~8 seconds)
 sleep 8
 
-# Switch to Autopilot mode: Shift+Tab cycles interactive → plan → autopilot
-# In tmux, BTab is the key name for Shift+Tab
-log "Switching to autopilot mode (Shift+Tab × 2)..."
+# ── Activate autopilot (Shift+Tab × 2) ──────────────────────
+log "Activating autopilot mode..."
 tmux send-keys -t "$TMUX_SESSION" BTab
 sleep 1
 tmux send-keys -t "$TMUX_SESSION" BTab
 sleep 1
 
-# Grant all permissions so Copilot never pauses for approvals
-log "Granting all permissions (/allow-all)..."
+# ── Grant all permissions ────────────────────────────────────
+log "Granting all permissions..."
 tmux send-keys -t "$TMUX_SESSION" "/allow-all" Enter
 sleep 2
 
-# Submit the task prompt
-log "Submitting task to Copilot..."
-# Use ctrl+s to run while preserving terminal state cleanly
-tmux send-keys -t "$TMUX_SESSION" "$TASK" Enter
+# ── If resuming, try native /resume first ───────────────────
+if [ "$MODE" = "resume" ] && [ -n "$COPILOT_RESUME_CMD" ]; then
+    log "Attempting native Copilot session resume..."
+    tmux send-keys -t "$TMUX_SESSION" "$COPILOT_RESUME_CMD" Enter
+    sleep 3
+fi
+
+# ── Submit the task / resume prompt ─────────────────────────
+log "Submitting prompt to Copilot..."
+tmux send-keys -t "$TMUX_SESSION" "$INITIAL_PROMPT" Enter
+
+# ── Capture session ID for future resume ────────────────────
+# Poll ~/.copilot for the newest session file and extract its ID
+(
+    sleep 15
+    SESSION_ID=$(ls -t /root/.copilot/sessions/ 2>/dev/null | head -1 | sed 's/\.json//')
+    if [ -n "$SESSION_ID" ]; then
+        save_session_state "$TASK" "in_progress" "$SESSION_ID"
+        log "Session ID captured: $SESSION_ID"
+    fi
+    # Touch checkpoint every 5 minutes while tmux session is alive
+    while tmux has-session -t "$TMUX_SESSION" 2>/dev/null; do
+        sleep 300
+        touch_checkpoint
+    done
+) &
+CHECKPOINT_PID=$!
 
 echo ""
 echo -e "${BOLD}╔══════════════════════════════════════════════╗${NC}"
-echo -e "${BOLD}║  Copilot agent is running in autopilot mode  ║${NC}"
+echo -e "${BOLD}║  Copilot agent running in autopilot mode     ║${NC}"
+echo -e "${BOLD}║  Mode: ${MODE}                                    ${NC}"
 echo -e "${BOLD}║                                              ║${NC}"
-echo -e "${BOLD}║  Press Ctrl+C to detach (agent keeps going)  ║${NC}"
-echo -e "${BOLD}║  Run: tmux attach -t copilot-agent  to rejoin║${NC}"
+echo -e "${BOLD}║  Ctrl+C to detach (agent keeps going)        ║${NC}"
+echo -e "${BOLD}║  tmux attach -t copilot-agent  to rejoin     ║${NC}"
+echo -e "${BOLD}║  docker start <name>  to resume if stopped   ║${NC}"
 echo -e "${BOLD}╚══════════════════════════════════════════════╝${NC}"
 echo ""
 
-# Attach to the session so the user can observe / interact
+# ── Attach and wait ──────────────────────────────────────────
 tmux attach-session -t "$TMUX_SESSION" || true
 
-# ── Auto-generate report when Copilot exits ──────────────────
+# ── Post-session: kill checkpoint loop, generate report ─────
+kill $CHECKPOINT_PID 2>/dev/null || true
 echo ""
-echo -e "${CYAN}[copilot-agent]${NC} Copilot session ended — generating change report..."
+log "Copilot session ended — generating change report..."
 generate-report
+mark_session_complete
+

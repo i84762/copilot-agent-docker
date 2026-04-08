@@ -55,11 +55,17 @@ param(
     [string]$GoVersion      = "1.22.5",
 
     # Firebase Test Lab
-    [string]$FirebaseProjectId   = $env:FIREBASE_PROJECT_ID,
-    [string]$GcloudKeyFile       = $env:GCLOUD_KEY_FILE,       # Windows path to SA key JSON
-    [string]$GoogleCredentialsJson = $env:GOOGLE_CREDENTIALS_JSON, # inline JSON string
-    [string]$FirebaseTestDevice  = $env:FIREBASE_TEST_DEVICE,
-    [string]$FirebaseTestTimeout = $env:FIREBASE_TEST_TIMEOUT,
+    [string]$FirebaseProjectId     = $env:FIREBASE_PROJECT_ID,
+    [string]$GcloudKeyFile         = $env:GCLOUD_KEY_FILE,
+    [string]$GoogleCredentialsJson = $env:GOOGLE_CREDENTIALS_JSON,
+    [string]$FirebaseTestDevice    = $env:FIREBASE_TEST_DEVICE,
+    [string]$FirebaseTestTimeout   = $env:FIREBASE_TEST_TIMEOUT,
+
+    # Mode flags
+    [switch]$Plan,          # Run interactive planning session first
+    [switch]$Resume,        # Force resume of last session (even if marked complete)
+    [switch]$NewSession,    # Discard all saved state and start completely fresh
+    [switch]$NoHostInstructions,  # Skip reading ~/.copilot/copilot-instructions.md from this machine
 
     [switch]$Rebuild
 )
@@ -107,6 +113,15 @@ if ($Rebuild -or -not (docker image inspect $ImageName 2>$null)) {
     Write-Host "Using existing image '$ImageName'. Use -Rebuild to force rebuild." -ForegroundColor DarkCyan
 }
 
+# ── Host Copilot home (for global instructions) ─────────────
+# Auto-detect %USERPROFILE%\.copilot; create it so Docker bind mount always works
+$HostCopilotHome = Join-Path $env:USERPROFILE ".copilot"
+if (-not (Test-Path $HostCopilotHome)) {
+    New-Item -ItemType Directory -Path $HostCopilotHome -Force | Out-Null
+}
+$env:HOST_COPILOT_HOME = $HostCopilotHome
+$env:COPILOT_USE_HOST_INSTRUCTIONS = if ($NoHostInstructions) { "false" } else { "true" }
+
 # ── Compose env ──────────────────────────────────────────────
 $env:PROJECT_PATH              = $ProjectPath
 $env:GH_TOKEN                  = $GhToken
@@ -119,6 +134,11 @@ $env:GIT_USER_NAME             = $GitUserName
 $env:GIT_USER_EMAIL            = $GitUserEmail
 $env:FLUTTER_VERSION           = $FlutterVersion
 $env:GO_VERSION                = $GoVersion
+
+# Mode flags
+$env:COPILOT_PLAN_MODE         = if ($Plan)       { "true" } else { "false" }
+$env:COPILOT_FORCE_RESUME      = if ($Resume)     { "true" } else { "false" }
+$env:COPILOT_NEW_SESSION       = if ($NewSession) { "true" } else { "false" }
 
 # Firebase Test Lab
 $env:FIREBASE_PROJECT_ID       = $FirebaseProjectId
@@ -138,12 +158,46 @@ if ($GcloudKeyFile -and (Test-Path $GcloudKeyFile)) {
 Write-Host ""
 Write-Host "══════════════════════════════════════════════" -ForegroundColor DarkCyan
 Write-Host "  Copilot Agent Container" -ForegroundColor Cyan
+
+# ── Show mode ─────────────────────────────────────────────────
+if ($Plan) {
+    Write-Host "  Mode    : PLAN — interactive, Copilot will ask clarifying questions" -ForegroundColor Yellow
+} elseif ($NewSession) {
+    Write-Host "  Mode    : NEW SESSION — all previous state will be cleared" -ForegroundColor Red
+} elseif ($Resume) {
+    Write-Host "  Mode    : RESUME — forcing resume of last session" -ForegroundColor Magenta
+} else {
+    # Auto-detect resume from state file
+    $StateFile = Join-Path $ProjectPath ".copilot-session\state.json"
+    if (Test-Path $StateFile) {
+        $State = Get-Content $StateFile | ConvertFrom-Json
+        if ($State.status -eq "in_progress") {
+            Write-Host "  Mode    : AUTO-RESUME — incomplete session detected" -ForegroundColor Magenta
+            Write-Host "  Checkpoint: $($State.last_checkpoint)" -ForegroundColor DarkGray
+        } elseif ($State.status -eq "planned") {
+            Write-Host "  Mode    : EXECUTE PLAN — PLAN.md found, running autonomously" -ForegroundColor Green
+        } else {
+            Write-Host "  Mode    : NORMAL — fresh autonomous run" -ForegroundColor Green
+        }
+    } else {
+        Write-Host "  Mode    : NORMAL — fresh autonomous run" -ForegroundColor Green
+    }
+}
+
 Write-Host "  Project : $ProjectPath" -ForegroundColor White
 if ($Task)             { Write-Host "  Task    : $($Task.Substring(0, [Math]::Min(60,$Task.Length)))..." -ForegroundColor White }
 if ($ContainerTaskFile){ Write-Host "  TaskFile: $ContainerTaskFile" -ForegroundColor White }
 if ($InstructionsRepo) { Write-Host "  Config  : $InstructionsRepo" -ForegroundColor White }
+$hostInstrFile = Join-Path $HostCopilotHome "copilot-instructions.md"
+if (-not $NoHostInstructions -and (Test-Path $hostInstrFile)) {
+    Write-Host "  HostInst: $hostInstrFile" -ForegroundColor White
+} elseif (-not $NoHostInstructions) {
+    Write-Host "  HostInst: (none — create $hostInstrFile to add global rules)" -ForegroundColor DarkGray
+} else {
+    Write-Host "  HostInst: disabled (-NoHostInstructions)" -ForegroundColor DarkGray
+}
 if ($FirebaseProjectId){ Write-Host "  Firebase: $FirebaseProjectId ($($env:FIREBASE_TEST_DEVICE))" -ForegroundColor Green }
-else                   { Write-Host "  Firebase: disabled (set -FirebaseProjectId to enable)" -ForegroundColor DarkGray }
+else                   { Write-Host "  Firebase: disabled" -ForegroundColor DarkGray }
 Write-Host "══════════════════════════════════════════════" -ForegroundColor DarkCyan
 Write-Host ""
 

@@ -34,9 +34,21 @@ services:
       # Branch to read from (default: main)
       - COPILOT_INSTRUCTIONS_BRANCH=${COPILOT_INSTRUCTIONS_BRANCH:-main}
 
+      # ── Global instructions (from host ~/.copilot) ────────────
+      # Set to "false" to skip reading host home instructions
+      - COPILOT_USE_HOST_INSTRUCTIONS=${COPILOT_USE_HOST_INSTRUCTIONS:-true}
+
       # ── SDK version overrides (optional) ─────────────────────
       - FLUTTER_VERSION=${FLUTTER_VERSION:-3.24.5}
       - GO_VERSION=${GO_VERSION:-1.22.5}
+
+      # ── Mode flags ───────────────────────────────────────────
+      # Set to "true" to run interactive planning session before execution
+      - COPILOT_PLAN_MODE=${COPILOT_PLAN_MODE:-false}
+      # Set to "true" to force resume even if last session was marked complete
+      - COPILOT_FORCE_RESUME=${COPILOT_FORCE_RESUME:-false}
+      # Set to "true" to discard all saved state and start completely fresh
+      - COPILOT_NEW_SESSION=${COPILOT_NEW_SESSION:-false}
 
       # ── Firebase Test Lab (optional) ─────────────────────────
       # Your Firebase / GCP project ID
@@ -56,6 +68,10 @@ services:
 
       # SDK cache — survives container restarts (avoids re-downloading)
       - copilot_sdk_cache:/sdks
+
+      # Host user's ~/.copilot folder (read-only) — provides global instructions
+      # run-copilot.ps1 creates this dir automatically; set HOST_COPILOT_HOME to override
+      - ${HOST_COPILOT_HOME}:/host-copilot-home:ro
 
       # Service account key file (only mounted when GCLOUD_KEY_FILE is set)
       - ${GCLOUD_KEY_FILE:-/dev/null}:/keys/sa-key.json:ro
