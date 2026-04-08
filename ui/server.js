@@ -348,25 +348,23 @@ wss.on('connection', ws => {
       case 'subscribe_logs': {
         cleanup();
         activeId = msg.containerId;
-        devLog(`[subscribe_logs] containerId=${activeId} devMode=${devMode}`);
+        devLog(`[subscribe_logs] containerId=${activeId}`);
         try {
           const c = docker.getContainer(activeId);
 
-          if (devMode) {
-            // In dev mode, emit container inspect info first
-            try {
-              const info = await c.inspect();
-              devLog(`[inspect] name=${info.Name} image=${info.Config?.Image} status=${info.State?.Status}`);
-              devLog(`[inspect] created=${info.Created} started=${info.State?.StartedAt}`);
-              devLog(`[inspect] mounts=${JSON.stringify(info.Mounts?.map(m => `${m.Source}→${m.Destination}`))}`);
-              const envLines = (info.Config?.Env || [])
-                .map(e => e.startsWith('GH_TOKEN') || e.includes('API_KEY') || e.includes('KEY=')
-                  ? e.replace(/=(.{4}).*/, '=****') : e);
-              devLog(`[inspect] env=\n  ${envLines.join('\n  ')}`);
-            } catch (e) { devLog(`[inspect] failed: ${e.message}`); }
-          }
+          // Always emit container inspect info to dev log
+          try {
+            const info = await c.inspect();
+            devLog(`[inspect] name=${info.Name} image=${info.Config?.Image} status=${info.State?.Status}`);
+            devLog(`[inspect] created=${info.Created} started=${info.State?.StartedAt}`);
+            devLog(`[inspect] mounts=${JSON.stringify(info.Mounts?.map(m => `${m.Source}→${m.Destination}`))}`);
+            const envLines = (info.Config?.Env || [])
+              .map(e => e.startsWith('GH_TOKEN') || e.includes('API_KEY') || e.includes('KEY=')
+                ? e.replace(/=(.{4}).*/, '=****') : e);
+            devLog(`[inspect] env=\n  ${envLines.join('\n  ')}`);
+          } catch (e) { devLog(`[inspect] failed: ${e.message}`); }
 
-          logStream = await c.logs({ stdout: true, stderr: true, follow: true, tail: 300, timestamps: devMode });
+          logStream = await c.logs({ stdout: true, stderr: true, follow: true, tail: 300, timestamps: false });
 
           logStream.on('data', chunk => {
             const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
@@ -415,7 +413,7 @@ wss.on('connection', ws => {
           step('create',    'Container created & started', 'ok');
           devLog(`[create] containerId=${container.id}`);
 
-          if (devMode) {
+          if (true) {
             try {
               const info = await container.inspect();
               devLog(`[inspect] name=${info.Name}`);
@@ -428,9 +426,9 @@ wss.on('connection', ws => {
           }
 
           step('attach',    'Attaching log stream',        'active');
-          logStream = await container.logs({ stdout: true, stderr: true, follow: true, tail: 0, timestamps: devMode });
+          logStream = await container.logs({ stdout: true, stderr: true, follow: true, tail: 0, timestamps: false });
           step('attach',    'Log stream attached — agent starting', 'ok');
-          devLog(`[attach] streaming stdout+stderr timestamps=${devMode}`);
+          devLog(`[attach] streaming stdout+stderr`);
 
           safeSend(ws, { type: 'progress_done' });
           safeSend(ws, { type: 'container_started', containerId: container.id, mode });

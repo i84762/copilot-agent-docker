@@ -736,15 +736,27 @@ function appendDevLog(text) {
   const line = `[${ts}] ${text}\n`;
   devLogBuffer += line;
 
+  // Update inline panel
   const el = $('devLogContent');
-  if (!el) return;
+  if (el) {
+    if (!devSearchQuery || line.toLowerCase().includes(devSearchQuery)) {
+      el.textContent += line;
+      const wrap = el.parentElement;
+      const nearBottom = wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < 80;
+      if (nearBottom) wrap.scrollTop = wrap.scrollHeight;
+    }
+  }
 
-  if (!devSearchQuery || line.toLowerCase().includes(devSearchQuery)) {
-    el.textContent += line;
-    // Only autoscroll if panel is open and user is near the bottom
-    const wrap = el.parentElement;
-    const nearBottom = wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < 80;
-    if (nearBottom) wrap.scrollTop = wrap.scrollHeight;
+  // Also update modal if open
+  const modal = $('devLogsModal');
+  if (modal && !modal.classList.contains('hidden')) {
+    const mc = $('devLogContentModal');
+    const mq = $('devLogSearchModal').value.toLowerCase().trim();
+    if (!mq || line.toLowerCase().includes(mq)) {
+      mc.textContent += line;
+      const nearBottom = mc.scrollHeight - mc.scrollTop - mc.clientHeight < 80;
+      if (nearBottom) mc.scrollTop = mc.scrollHeight;
+    }
   }
 }
 
@@ -781,6 +793,59 @@ $('downloadDevLogsBtn').addEventListener('click', () => {
 });
 
 $('devLogSearch').addEventListener('input', e => applyDevSearch(e.target.value));
+
+// ── Dev logs fullscreen modal ─────────────────────────────────────────────────
+
+function openDevLogsModal() {
+  const modal = $('devLogsModal');
+  const modalContent = $('devLogContentModal');
+  // Sync content
+  const query = $('devLogSearch').value.toLowerCase().trim();
+  if (!query) {
+    modalContent.textContent = devLogBuffer;
+  } else {
+    modalContent.textContent = devLogBuffer.split('\n')
+      .filter(l => l.toLowerCase().includes(query)).join('\n');
+  }
+  $('devLogSearchModal').value = $('devLogSearch').value;
+  modal.classList.remove('hidden');
+  modalContent.scrollTop = modalContent.scrollHeight;
+}
+
+function closeDevLogsModal() {
+  $('devLogsModal').classList.add('hidden');
+}
+
+$('expandDevLogsBtn').addEventListener('click', openDevLogsModal);
+$('closeDevLogsModalBtn').addEventListener('click', closeDevLogsModal);
+$('devLogsModalBackdrop').addEventListener('click', closeDevLogsModal);
+
+$('devLogSearchModal').addEventListener('input', e => {
+  const q = e.target.value.toLowerCase().trim();
+  const mc = $('devLogContentModal');
+  if (!q) {
+    mc.textContent = devLogBuffer;
+  } else {
+    mc.textContent = devLogBuffer.split('\n').filter(l => l.toLowerCase().includes(q)).join('\n');
+  }
+  mc.scrollTop = mc.scrollHeight;
+  // Keep inline search in sync
+  $('devLogSearch').value = e.target.value;
+  applyDevSearch(e.target.value);
+});
+
+$('downloadDevLogsModalBtn').addEventListener('click', () => {
+  const blob = new Blob([devLogBuffer], { type: 'text/plain' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = `dev-logs-${Date.now()}.txt`; a.click();
+  URL.revokeObjectURL(url);
+});
+
+// Escape key closes the modal
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeDevLogsModal();
+});
 
 // ── Launch progress panel ─────────────────────────────────────────────────────
 

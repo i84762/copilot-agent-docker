@@ -250,6 +250,7 @@
           <input id="devLogSearch" type="search" class="dev-log-search" placeholder="Search logs…" autocomplete="off" />
         </div>
         <div class="dev-log-actions">
+          <button id="expandDevLogsBtn" class="btn btn-ghost btn-xs" title="Expand to fullscreen">⛶</button>
           <button id="downloadDevLogsBtn" class="btn btn-ghost btn-xs" title="Download dev logs">⬇</button>
           <button id="clearDevLogsBtn" class="btn btn-ghost btn-xs" title="Clear dev logs">✕</button>
         </div>
@@ -330,6 +331,22 @@
     <div class="modal-footer">
       <button id="closeBuildBtn" class="btn btn-ghost" disabled>Close</button>
     </div>
+  </div>
+</div>
+
+<!-- Dev logs fullscreen modal -->
+<div id="devLogsModal" class="modal hidden">
+  <div class="modal-backdrop" id="devLogsModalBackdrop"></div>
+  <div class="modal-box modal-fullscreen">
+    <div class="modal-header">
+      <span>🔍 Dev Logs</span>
+      <div class="dev-log-search-wrap" style="flex:1;margin:0 12px;">
+        <input id="devLogSearchModal" type="search" class="dev-log-search" placeholder="Search logs…" autocomplete="off" />
+      </div>
+      <button id="downloadDevLogsModalBtn" class="btn btn-ghost btn-xs" title="Download dev logs">⬇ Download</button>
+      <button id="closeDevLogsModalBtn" class="btn btn-ghost" style="margin-left:8px">✕ Close</button>
+    </div>
+    <pre id="devLogContentModal" class="dev-log-content dev-log-content-modal"></pre>
   </div>
 </div>
 
