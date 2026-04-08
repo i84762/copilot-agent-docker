@@ -423,7 +423,7 @@ select.input-field { cursor: pointer; appearance: none; background-image: url("d
 .dev-log-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
   padding: 4px 10px;
   background: var(--surface2);
   border-bottom: 1px solid var(--border);
@@ -431,6 +431,22 @@ select.input-field { cursor: pointer; appearance: none; background-image: url("d
   color: var(--text-muted);
   flex-shrink: 0;
 }
+.dev-log-label { white-space: nowrap; }
+.dev-log-search-wrap { flex: 1; min-width: 0; }
+.dev-log-search {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 11px;
+  font-family: var(--mono);
+  padding: 2px 6px;
+  outline: none;
+}
+.dev-log-search:focus { border-color: var(--accent); }
+.dev-log-search::placeholder { color: var(--text-muted); }
+.dev-log-actions { display: flex; gap: 4px; flex-shrink: 0; }
 
 .dev-log-content {
   flex: 1;

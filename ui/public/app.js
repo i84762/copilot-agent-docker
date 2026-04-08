@@ -152,7 +152,7 @@ function connectWS() {
         break;
 
       case 'dev_log_status':
-        setDevMode(msg.enabled);
+        // No longer used — server always streams dev_log
         break;
 
       case 'progress': {
@@ -707,49 +707,80 @@ function clearTerminal(resetBuffer = true) {
 }
 
 // ── Dev logs panel ────────────────────────────────────────────────────────────
+// Logs are ALWAYS captured in the background; the panel just shows/hides them.
 
-let devLogsEnabled = false;
-let devLogBuffer   = '';
+let devPanelOpen = false;
+let devLogBuffer = '';
+let devSearchQuery = '';
 
-function setDevMode(enabled) {
-  devLogsEnabled = enabled;
+function setDevPanelOpen(open) {
+  devPanelOpen = open;
   const btn   = $('devLogsBtn');
   const panel = $('devLogPanel');
-  if (enabled) {
+  if (open) {
     btn.classList.add('btn-active');
-    btn.textContent = '🔍 Dev Logs ●';
     panel.classList.remove('hidden');
+    // Request a state dump from server now that panel is visible
+    wsSend({ type: 'toggle_dev_logs' });
+    // Scroll to bottom
+    const pre = $('devLogContent');
+    if (pre) pre.parentElement.scrollTop = pre.parentElement.scrollHeight;
   } else {
     btn.classList.remove('btn-active');
-    btn.textContent = '🔍 Dev Logs';
     panel.classList.add('hidden');
   }
 }
 
 function appendDevLog(text) {
-  const el  = $('devLogContent');
-  if (!el) return;
-  const ts  = new Date().toISOString().slice(11, 23); // HH:MM:SS.mmm
+  const ts   = new Date().toISOString().slice(11, 23); // HH:MM:SS.mmm
   const line = `[${ts}] ${text}\n`;
   devLogBuffer += line;
-  el.textContent += line;
-  // Autoscroll to bottom
-  el.parentElement.scrollTop = el.parentElement.scrollHeight;
+
+  const el = $('devLogContent');
+  if (!el) return;
+
+  if (!devSearchQuery || line.toLowerCase().includes(devSearchQuery)) {
+    el.textContent += line;
+    // Only autoscroll if panel is open and user is near the bottom
+    const wrap = el.parentElement;
+    const nearBottom = wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < 80;
+    if (nearBottom) wrap.scrollTop = wrap.scrollHeight;
+  }
 }
 
-$('devLogsBtn').addEventListener('click', () => {
-  const next = !devLogsEnabled;
-  wsSend({ type: 'toggle_dev_logs', enabled: next });
-  // Optimistic toggle — server confirms with dev_log_status
-  setDevMode(next);
-  if (next) toast('Dev logs enabled', 'info');
-});
+function applyDevSearch(query) {
+  devSearchQuery = query.toLowerCase().trim();
+  const el = $('devLogContent');
+  if (!el) return;
+  if (!devSearchQuery) {
+    el.textContent = devLogBuffer;
+  } else {
+    const lines = devLogBuffer.split('\n');
+    el.textContent = lines.filter(l => l.toLowerCase().includes(devSearchQuery)).join('\n');
+  }
+  const wrap = el.parentElement;
+  wrap.scrollTop = wrap.scrollHeight;
+}
+
+$('devLogsBtn').addEventListener('click', () => setDevPanelOpen(!devPanelOpen));
 
 $('clearDevLogsBtn').addEventListener('click', () => {
   devLogBuffer = '';
   const el = $('devLogContent');
   if (el) el.textContent = '';
 });
+
+$('downloadDevLogsBtn').addEventListener('click', () => {
+  const blob = new Blob([devLogBuffer], { type: 'text/plain' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = `dev-logs-${Date.now()}.txt`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+$('devLogSearch').addEventListener('input', e => applyDevSearch(e.target.value));
 
 // ── Launch progress panel ─────────────────────────────────────────────────────
 

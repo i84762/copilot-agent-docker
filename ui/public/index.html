@@ -228,9 +228,9 @@
     <div id="terminalToolbar">
       <span id="terminalTitle" class="terminal-title">Idle</span>
       <div class="terminal-tools">
-        <button id="devLogsBtn" class="btn btn-ghost btn-xs" title="Toggle verbose dev logs">🔍 Dev Logs</button>
+        <button id="devLogsBtn" class="btn btn-ghost btn-xs" title="Show/hide dev logs panel">🔍 Dev Logs</button>
         <button id="clearTermBtn" class="btn btn-ghost btn-xs" title="Clear terminal">✕ Clear</button>
-        <button id="downloadLogsBtn" class="btn btn-ghost btn-xs" title="Download logs">⬇ Logs</button>
+        <button id="downloadLogsBtn" class="btn btn-ghost btn-xs" title="Download terminal logs">⬇ Logs</button>
       </div>
     </div>
 
@@ -242,11 +242,17 @@
 
     <div id="terminal"></div>
 
-    <!-- Dev log panel — shown when dev mode is active -->
+    <!-- Dev log panel — always captures logs, shown/hidden by button -->
     <div id="devLogPanel" class="dev-log-panel hidden">
       <div class="dev-log-toolbar">
-        <span>🔍 Dev Logs</span>
-        <button id="clearDevLogsBtn" class="btn btn-ghost btn-xs">Clear</button>
+        <span class="dev-log-label">🔍 Dev Logs</span>
+        <div class="dev-log-search-wrap">
+          <input id="devLogSearch" type="search" class="dev-log-search" placeholder="Search logs…" autocomplete="off" />
+        </div>
+        <div class="dev-log-actions">
+          <button id="downloadDevLogsBtn" class="btn btn-ghost btn-xs" title="Download dev logs">⬇</button>
+          <button id="clearDevLogsBtn" class="btn btn-ghost btn-xs" title="Clear dev logs">✕</button>
+        </div>
       </div>
       <pre id="devLogContent" class="dev-log-content"></pre>
     </div>

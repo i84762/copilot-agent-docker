@@ -323,10 +323,8 @@ wss.on('connection', ws => {
   let logStream       = null;
   let containerStream = null; // plan mode interactive stream
   let activeId        = null;
-  let devMode         = false; // verbose dev logging enabled
-
+  // Dev logs are always streamed — client decides whether to show the panel
   function devLog(text) {
-    if (!devMode) return;
     safeSend(ws, { type: 'dev_log', text });
   }
 
@@ -567,31 +565,27 @@ wss.on('connection', ws => {
         break;
       }
 
-      // ── Toggle verbose dev logging ─────────────────────────────────────────
+      // ── Dev logs state dump (panel open) ───────────────────────────────────
       case 'toggle_dev_logs': {
-        devMode = !!msg.enabled;
-        safeSend(ws, { type: 'dev_log_status', enabled: devMode });
-
-        if (devMode) {
-          // Emit current state immediately so dev panel isn't blank
-          const ts = new Date().toISOString();
-          devLog(`[dev logs enabled] ${ts}`);
-          devLog(`[server] node ${process.version}  pid=${process.pid}`);
-          devLog(`[docker] config=${JSON.stringify(dockerCfg)}`);
-          if (activeId) {
-            devLog(`[active container] ${activeId}`);
-            try {
-              const info = await docker.getContainer(activeId).inspect();
-              devLog(`[inspect] name=${info.Name} state=${info.State?.Status}`);
-              devLog(`[inspect] started=${info.State?.StartedAt} pid=${info.State?.Pid}`);
-              const envLines = (info.Config?.Env || [])
-                .map(e => e.startsWith('GH_TOKEN') || e.includes('API_KEY') || e.includes('KEY=')
-                  ? e.replace(/=(.{4}).*/, '=****') : e);
-              devLog(`[inspect] env:\n  ${envLines.join('\n  ')}`);
-            } catch (e) { devLog(`[inspect] ${e.message}`); }
-          } else {
-            devLog('[active container] none');
-          }
+        // Dev logs always stream; this message requests an immediate state dump
+        // when user opens the panel so it isn't blank.
+        const ts = new Date().toISOString();
+        devLog(`[dev logs] panel opened ${ts}`);
+        devLog(`[server] node ${process.version}  pid=${process.pid}`);
+        devLog(`[docker] config=${JSON.stringify(dockerCfg)}`);
+        if (activeId) {
+          devLog(`[active container] ${activeId}`);
+          try {
+            const info = await docker.getContainer(activeId).inspect();
+            devLog(`[inspect] name=${info.Name} state=${info.State?.Status}`);
+            devLog(`[inspect] started=${info.State?.StartedAt} pid=${info.State?.Pid}`);
+            const envLines = (info.Config?.Env || [])
+              .map(e => e.startsWith('GH_TOKEN') || e.includes('API_KEY') || e.includes('KEY=')
+                ? e.replace(/=(.{4}).*/, '=****') : e);
+            devLog(`[inspect] env:\n  ${envLines.join('\n  ')}`);
+          } catch (e) { devLog(`[inspect] ${e.message}`); }
+        } else {
+          devLog('[active container] none');
         }
         break;
       }
