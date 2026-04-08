@@ -93,21 +93,51 @@ function connectWS() {
         break;
       }
 
+      // ── Chat UI events (plan mode) ─────────────────────────────────────────
+      case 'chat_chunk': {
+        hideChatTyping();
+        let bubble = document.getElementById('currentAgentBubble');
+        if (!bubble) {
+          bubble = appendChatBubble('agent');
+          bubble.id = 'currentAgentBubble';
+        }
+        const textEl = bubble.querySelector('.bubble-text');
+        textEl.textContent += msg.text;
+        scrollChatToBottom();
+        break;
+      }
+
+      case 'chat_message_end': {
+        const bubble = document.getElementById('currentAgentBubble');
+        if (bubble) bubble.removeAttribute('id');
+        hideChatTyping();
+        scrollChatToBottom();
+        break;
+      }
+
+      case 'chat_typing': {
+        showChatTyping();
+        scrollChatToBottom();
+        break;
+      }
+
+      case 'chat_system': {
+        appendChatBubble('system', msg.text);
+        hideChatTyping();
+        scrollChatToBottom();
+        break;
+      }
+      // ──────────────────────────────────────────────────────────────────────
+
       case 'container_started':
         activeContainerId = msg.containerId;
         setActiveContainerLabel(msg.containerId);
         if (msg.mode === 'plan') {
           enterState('planning');
-          // Forward xterm input to server
-          term.onData(data => {
-            if (ws && ws.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify({
-                type: 'terminal_input',
-                data: btoa(data),
-              }));
-            }
-          });
-          // Sync terminal size
+          // Show welcome system message in chat
+          appendChatBubble('system', '🗺 Planning session started. The agent is analyzing your project…');
+          scrollChatToBottom();
+          // Still sync PTY size for the underlying terminal process
           sendResize();
         } else {
           enterState('running');
@@ -191,6 +221,11 @@ function enterState(newState) {
   const modeTag = $('modeTag');
   modeTag.classList.remove('hidden', 'mode-plan', 'mode-run', 'mode-resume');
 
+  // Toggle between terminal and chat panel
+  const inPlanMode = (newState === 'planning');
+  $('terminal').classList.toggle('hidden', inPlanMode);
+  $('chatPanel').classList.toggle('hidden', !inPlanMode);
+
   if (newState === 'planning') {
     modeTag.textContent = '🗺 Planning';
     modeTag.classList.add('mode-plan');
@@ -217,9 +252,6 @@ function updateButtons() {
   $('cancelBtn').disabled  = idle || planDone;
   $('abortBtn').disabled   = idle || planDone;
   $('execPlanBtn').classList.toggle('hidden', !planDone);
-
-  // Terminal is only writable in planning mode
-  term.options.disableStdin = (state !== 'planning');
 }
 
 function updateTerminalTitle() {
@@ -705,6 +737,71 @@ function clearTerminal(resetBuffer = true) {
   term.clear();
   if (resetBuffer) logBuffer = '';
 }
+
+// ── Chat UI helpers ───────────────────────────────────────────────────────────
+
+/**
+ * Append a bubble to the chat panel.
+ * type: 'agent' | 'user' | 'system'
+ * Returns the bubble element.
+ */
+function appendChatBubble(type, text = '') {
+  const messages = $('chatMessages');
+  const wrap = document.createElement('div');
+  wrap.className = `chat-bubble chat-bubble-${type}`;
+
+  const textEl = document.createElement('pre');
+  textEl.className = 'bubble-text';
+  textEl.textContent = text;
+  wrap.appendChild(textEl);
+  messages.appendChild(wrap);
+  return wrap;
+}
+
+function scrollChatToBottom() {
+  const el = $('chatMessages');
+  if (el) el.scrollTop = el.scrollHeight;
+}
+
+function showChatTyping() {
+  $('chatTyping').classList.remove('hidden');
+}
+
+function hideChatTyping() {
+  $('chatTyping').classList.add('hidden');
+}
+
+function sendChatMessage() {
+  const input = $('chatInput');
+  const text  = input.value;
+  if (!text.trim()) return;
+
+  // Show user bubble
+  appendChatBubble('user', text);
+  scrollChatToBottom();
+
+  // Send to server
+  wsSend({ type: 'chat_input', text });
+
+  input.value = '';
+  input.style.height = 'auto';
+  showChatTyping();
+}
+
+$('chatSendBtn').addEventListener('click', sendChatMessage);
+
+$('chatInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendChatMessage();
+  }
+});
+
+// Auto-resize textarea
+$('chatInput').addEventListener('input', function () {
+  this.style.height = 'auto';
+  this.style.height = Math.min(this.scrollHeight, 180) + 'px';
+});
 
 // ── Dev logs panel ────────────────────────────────────────────────────────────
 // Logs are ALWAYS captured in the background; the panel just shows/hides them.

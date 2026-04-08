@@ -80,6 +80,26 @@ function writeServerConfig(data) {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/**
+ * Strip ANSI/VT escape sequences from a string so agent output
+ * can be displayed in the chat UI as plain text.
+ */
+function stripAnsi(str) {
+  return str
+    // CSI sequences: ESC [ ... (final byte A-Za-z ~)
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '')
+    // OSC sequences: ESC ] ... ST (BEL or ESC \)
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+    // Charset selection / other 2-byte sequences
+    .replace(/\x1b[()][A-Za-z0-9=]/g, '')
+    // Remaining lone ESC sequences
+    .replace(/\x1b[^[\]()]/g, '')
+    // Bare ESC
+    .replace(/\x1b/g, '')
+    // Non-printable control chars (keep \t \n \r)
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
+}
+
 function safeSend(ws, obj) {
   try {
     if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
@@ -501,14 +521,39 @@ wss.on('connection', ws => {
           });
           devLog(`[plan] PTY attached — starting container`);
 
-          // Wire up stream BEFORE starting so no bytes are lost
+          // ── Chat protocol: strip ANSI, stream chunks, debounce message end ──
+          let agentTyping    = false;
+          let chatDebounce   = null;
+          const DEBOUNCE_MS  = 1500;
+
           containerStream.on('data', chunk => {
+            const raw = chunk.toString('utf8');
             devLog(`[plan stream] ${chunk.length}b`);
-            safeSend(ws, { type: 'output', data: bufToB64(chunk) });
+
+            const text = stripAnsi(raw);
+            if (!text) return;
+
+            // Signal typing indicator on first chunk of a new message
+            if (!agentTyping) {
+              agentTyping = true;
+              safeSend(ws, { type: 'chat_typing' });
+            }
+
+            safeSend(ws, { type: 'chat_chunk', text });
+
+            // Debounce: treat silence as end of agent response
+            if (chatDebounce) clearTimeout(chatDebounce);
+            chatDebounce = setTimeout(() => {
+              agentTyping = false;
+              safeSend(ws, { type: 'chat_message_end' });
+            }, DEBOUNCE_MS);
           });
+
           containerStream.on('end', () => {
             devLog(`[plan] stream ended for ${container.id}`);
-            safeSend(ws, { type: 'output', data: toB64('\r\n\x1b[90m[planning session ended — click Execute Plan to run]\x1b[0m\r\n') });
+            if (chatDebounce) clearTimeout(chatDebounce);
+            safeSend(ws, { type: 'chat_message_end' });
+            safeSend(ws, { type: 'chat_system', text: '📋 Planning session ended — click Execute Plan to run.' });
             safeSend(ws, { type: 'container_stopped', containerId: container.id });
             safeSend(ws, { type: 'plan_complete' });
           });
@@ -518,6 +563,45 @@ wss.on('connection', ws => {
           await container.start();
           stepP('create',   'Container started',           'ok');
           stepP('attach',   'Interactive session ready',   'ok');
+
+          // ── Auto-setup: grant permissions then send initial task ──────────
+          const planAgent = (msg.config?.agent || 'copilot').toLowerCase();
+          const planTask  = (msg.config?.task  || '').trim();
+
+          // Build planning prompt to auto-send after agent is ready
+          const PLAN_PREFIX =
+            'You are in PLANNING MODE. Do NOT write any code yet.\n\n' +
+            'Start by greeting me and exploring the project structure, then ask clarifying questions.\n\n' +
+            'Task:\n';
+
+          if (planAgent === 'copilot') {
+            // Copilot needs ~10s to load before we can send /allow-all
+            setTimeout(() => {
+              if (containerStream) {
+                devLog('[plan auto-setup] sending /allow-all');
+                containerStream.write(Buffer.from('/allow-all\n'));
+              }
+            }, 10000);
+            if (planTask) {
+              setTimeout(() => {
+                if (containerStream) {
+                  devLog('[plan auto-setup] sending initial task');
+                  containerStream.write(Buffer.from(PLAN_PREFIX + planTask + '\n'));
+                }
+              }, 13000);
+            }
+          } else {
+            // Claude, Gemini, Aider: shorter startup; no /allow-all needed
+            if (planTask) {
+              const delay = planAgent === 'claude' ? 4000 : 5000;
+              setTimeout(() => {
+                if (containerStream) {
+                  devLog('[plan auto-setup] sending initial task');
+                  containerStream.write(Buffer.from(PLAN_PREFIX + planTask + '\n'));
+                }
+              }, delay);
+            }
+          }
 
           safeSend(ws, { type: 'progress_done' });
           safeSend(ws, { type: 'container_started', containerId: container.id, mode: 'plan' });
@@ -530,7 +614,20 @@ wss.on('connection', ws => {
         break;
       }
 
-      // ── Send keyboard input to plan terminal ──────────────────────────────
+      // ── Send user message to planning chat ────────────────────────────────
+      case 'chat_input': {
+        if (containerStream && msg.text) {
+          try {
+            devLog(`[chat_input] ${msg.text.slice(0, 120)}`);
+            containerStream.write(Buffer.from(msg.text + '\n'));
+          } catch (err) {
+            safeSend(ws, { type: 'error', message: `Chat input: ${err.message}` });
+          }
+        }
+        break;
+      }
+
+      // ── Send keyboard input to plan terminal (legacy / fallback) ──────────
       case 'terminal_input': {
         if (containerStream && msg.data) {
           try {
