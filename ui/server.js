@@ -744,6 +744,55 @@ wss.on('connection', ws => {
         break;
       }
 
+      // ── Advance to next planning step (triggered by "Next Phase" button) ────
+      case 'advance_step': {
+        if (!activePlanSessionId) break;
+        const sess = llmPlan.getSession(activePlanSessionId);
+        if (!sess) break;
+        const steps = llmPlan.PLANNING_STEPS;
+        const idx   = steps.findIndex(s => s.id === sess.currentStep);
+        const next  = steps[idx + 1];
+        if (!next) break;  // already on last step
+
+        devLog(`[advance_step] ${sess.currentStep} → ${next.id}`);
+
+        if (agentTyping) break;  // don't interrupt ongoing response
+
+        agentTyping = true;
+        safeSend(ws, { type: 'chat_typing' });
+
+        const stepNum = idx + 2;  // 1-indexed, next step
+        const advanceMsg =
+          `The user has confirmed they are ready to move on. ` +
+          `Please move to Step ${stepNum}: ${next.label}. ` +
+          `Begin with <STEP:${next.id}> on its own line.`;
+
+        llmPlan.sendPlanMessage(
+          activePlanSessionId,
+          advanceMsg,
+          (chunk) => { safeSend(ws, { type: 'chat_chunk', text: chunk }); },
+          (_full, quota) => {
+            agentTyping = false;
+            safeSend(ws, { type: 'chat_message_end' });
+            if (quota?.remaining != null) safeSend(ws, { type: 'quota_update', ...quota });
+            const plan = llmPlan.extractFinalPlan(activePlanSessionId);
+            if (plan) {
+              const s = llmPlan.getSession(activePlanSessionId);
+              writePlanToProject(s?.config?.projectPath, plan);
+              safeSend(ws, { type: 'plan_complete' });
+            }
+          },
+          (err) => {
+            agentTyping = false;
+            safeSend(ws, { type: 'chat_system', text: `⚠️ LLM API error: ${err.message}` });
+            safeSend(ws, { type: 'chat_message_end' });
+          },
+          (stepId, done) => { safeSend(ws, { type: 'plan_step', stepId, done }); },
+          true  // internal — don't show in history as user message
+        );
+        break;
+      }
+
       // ── Send keyboard input to plan terminal (legacy / fallback) ──────────
       case 'terminal_input': {
         if (containerStream && msg.data) {

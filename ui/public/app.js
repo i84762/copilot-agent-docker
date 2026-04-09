@@ -66,6 +66,7 @@ let pendingPlanConfig = null;  // held while waiting for plan_session_info check
 let logBuffer         = '';
 let containerRefreshTimer = null;
 let streamRenderTimer = null;
+let currentPlanStep   = 'requirements'; // tracks active planning step
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
 
@@ -186,6 +187,7 @@ function connectWS() {
 
       case 'plan_step': {
         updatePlanStep(msg.stepId, msg.done);
+        updateNextPhaseBtn();
         break;
       }
 
@@ -968,10 +970,14 @@ function scrollChatToBottom() {
 
 function showChatTyping() {
   $('chatTyping').classList.remove('hidden');
+  const btn = $('nextPhaseBtn');
+  if (btn) btn.disabled = true;
 }
 
 function hideChatTyping() {
   $('chatTyping').classList.add('hidden');
+  const btn = $('nextPhaseBtn');
+  if (btn) btn.disabled = false;
 }
 
 function sendChatMessage() {
@@ -992,6 +998,14 @@ function sendChatMessage() {
 }
 
 $('chatSendBtn').addEventListener('click', sendChatMessage);
+
+$('nextPhaseBtn').addEventListener('click', () => {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'advance_step' }));
+    const btn = $('nextPhaseBtn');
+    if (btn) btn.disabled = true;
+  }
+});
 
 $('chatInput').addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) {
@@ -1284,6 +1298,8 @@ function initPlanStepper() {
 }
 
 function updatePlanStep(stepId, done) {
+  // Track current active step for the next-phase button
+  if (!done) currentPlanStep = stepId;
   // Mark all steps before this one as done, set this as active or done
   let found = false;
   PLANNING_STEPS.forEach(step => {
@@ -1300,9 +1316,26 @@ function updatePlanStep(stepId, done) {
   });
 }
 
+function updateNextPhaseBtn() {
+  const btn = $('nextPhaseBtn');
+  const nameEl = $('nextPhaseName');
+  if (!btn || !nameEl) return;
+  const idx = PLANNING_STEPS.findIndex(s => s.id === currentPlanStep);
+  const next = PLANNING_STEPS[idx + 1];
+  if (!next || state !== 'planning') {
+    btn.classList.add('hidden');
+    return;
+  }
+  nameEl.textContent = next.label;
+  btn.classList.remove('hidden');
+}
+
 function hidePlanStepper() {
   const stepper = $('planStepper');
   if (stepper) stepper.classList.add('hidden');
+  const btn = $('nextPhaseBtn');
+  if (btn) btn.classList.add('hidden');
+  currentPlanStep = 'requirements';
 }
 
 function updateQuotaBadge(remaining, limit, provider, reset) {

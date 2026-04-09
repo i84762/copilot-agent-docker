@@ -478,6 +478,31 @@ select.input-field { cursor: pointer; appearance: none; background-image: url("d
 /* ── Planning phase timeline — compact floating widget, top-right of chat ───── */
 #chatPanel { position: relative; }
 
+/* ── "Next Phase" floating button ─────────────────────────────────────────── */
+.next-phase-btn {
+  position: absolute;
+  bottom: 72px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  background: var(--blue);
+  color: #fff;
+  border: none;
+  border-radius: 20px;
+  padding: 7px 18px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 2px 12px rgba(31,111,235,.45);
+  white-space: nowrap;
+  transition: opacity .15s, transform .15s, background .15s;
+  opacity: .92;
+}
+.next-phase-btn:hover  { opacity: 1; transform: translateX(-50%) translateY(-1px); }
+.next-phase-btn:active { transform: translateX(-50%) translateY(0); }
+.next-phase-btn:disabled { opacity: .4; cursor: not-allowed; transform: translateX(-50%); }
+.next-phase-btn.hidden { display: none; }
+
 .plan-stepper {
   position: absolute;
   top: 12px;
