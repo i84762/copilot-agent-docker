@@ -488,10 +488,11 @@ const GLOBAL_FIELDS = [
   'instructionsRepo','instructionsFile','instructionsBranch',
   'gitUserName','gitUserEmail','flutterVersion','goVersion',
   'firebaseProjectId','gcloudKeyFile','firebaseTestDevice',
+  'sessionName','projectPath','task','taskFile',
 ];
 const GLOBAL_CHECKBOXES = ['useHostInstructions'];
 
-// Fields saved in localStorage (per-browser session)
+// SESSION_FIELDS still written to localStorage as a fallback cache
 const SESSION_FIELDS = ['sessionName','projectPath','task','taskFile'];
 
 let _saveGlobalTimer = null;
