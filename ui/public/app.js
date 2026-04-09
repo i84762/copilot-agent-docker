@@ -60,6 +60,7 @@ term.onData(data => {
 let state = 'idle'; // idle | planning | running | plan_done | error
 let ws    = null;
 let activeContainerId = null;
+let containerStartedAt = 0;  // timestamp when container_started was received
 let lastConfig        = null;       // config used for last run (for Execute Plan)
 let logBuffer         = '';         // raw log accumulation for download
 let containerRefreshTimer = null;
@@ -168,6 +169,7 @@ function connectWS() {
 
       case 'container_started':
         activeContainerId = msg.containerId;
+        containerStartedAt = Date.now();
         setActiveContainerLabel(msg.containerId);
         if (msg.mode === 'plan') {
           enterState('planning');
@@ -202,8 +204,10 @@ function connectWS() {
 
       case 'containers_list':
         renderContainerList(msg.containers);
-        // Auto-recover: if we think a container is active but it's gone, reset to idle
-        if (activeContainerId && state !== 'idle') {
+        // Auto-recover: if we think a container is active but it's gone, reset to idle.
+        // Skip the check for 5s after container_started to avoid a race where the
+        // docker_event 'start' triggers a list refresh before the container appears.
+        if (activeContainerId && state !== 'idle' && (Date.now() - containerStartedAt) > 5000) {
           const stillExists = msg.containers && msg.containers.some(c => c.id === activeContainerId);
           if (!stillExists) {
             activeContainerId = null;
