@@ -562,45 +562,65 @@ async function sendPlanMessage(sessionId, userText, onChunk, onDone, onError, on
   sess.messages.push({ role: 'user', content: userText, ...(internal ? { _internal: true } : {}) });
 
   let full = '';
-  let tagBuf = '';  // accumulates partial tag text between chunks
+  let tagBuf = '';  // holds text that may contain an incomplete STEP tag
 
   const STEP_RE      = /<STEP:([a-z_]+)>/g;
   const STEP_DONE_RE = /<STEP_DONE:([a-z_]+)>/g;
 
-  const accChunk = text => {
-    // Accumulate for full text
-    full += text;
-    tagBuf += text;
+  // Flush safe text: process complete tags, strip them, send visible output.
+  // Any text from the last '<' that hasn't closed yet is held back in tagBuf.
+  const flushBuf = (final = false) => {
+    let toProcess;
+    if (final) {
+      toProcess = tagBuf;
+      tagBuf = '';
+    } else {
+      // Find the last '<' that could start a STEP tag still in progress
+      const ltIdx = tagBuf.lastIndexOf('<');
+      if (ltIdx !== -1 && tagBuf.indexOf('>', ltIdx) === -1) {
+        // Incomplete potential tag — hold back from '<' onwards
+        toProcess = tagBuf.slice(0, ltIdx);
+        tagBuf    = tagBuf.slice(ltIdx);
+      } else {
+        toProcess = tagBuf;
+        tagBuf    = '';
+      }
+    }
 
-    // Detect and fire step change tags — strip them from visible output
-    let visible = tagBuf;
+    if (!toProcess) return;
 
-    // Handle <STEP:id> tags
+    // Fire step events for complete tags
     let match;
     STEP_RE.lastIndex = 0;
-    while ((match = STEP_RE.exec(tagBuf)) !== null) {
+    while ((match = STEP_RE.exec(toProcess)) !== null) {
       const stepId = match[1];
       if (stepId !== sess.currentStep) {
         sess.currentStep = stepId;
         if (onStep) onStep(stepId, false);
       }
     }
-    // Handle <STEP_DONE:id> tags
     STEP_DONE_RE.lastIndex = 0;
-    while ((match = STEP_DONE_RE.exec(tagBuf)) !== null) {
+    while ((match = STEP_DONE_RE.exec(toProcess)) !== null) {
       const stepId = match[1];
       if (!sess.completedSteps.includes(stepId)) sess.completedSteps.push(stepId);
       if (onStep) onStep(stepId, true);
     }
 
-    // Strip all step tags from visible text
-    visible = visible.replace(/<STEP:[a-z_]+>/g, '').replace(/<STEP_DONE:[a-z_]+>/g, '');
-    tagBuf = '';
-
+    // Strip tags from visible output
+    const visible = toProcess
+      .replace(/<STEP:[a-z_]+>/g, '')
+      .replace(/<STEP_DONE:[a-z_]+>/g, '');
     if (visible) onChunk(visible);
   };
 
+  const accChunk = text => {
+    full   += text;
+    tagBuf += text;
+    flushBuf(false);
+  };
+
   const accDone  = (quota) => {
+    flushBuf(true);   // flush any held partial-tag text
     sess.messages.push({ role: 'assistant', content: full });
     savePlanSession(sessionId);   // persist after every agent reply
     onDone(full, quota);
