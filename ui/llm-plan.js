@@ -183,7 +183,7 @@ async function streamCopilot(messages, config, onChunk, onDone, onError) {
     model:    'gpt-4o',
     messages,
     stream:   true,
-    max_tokens: 4096,
+    max_tokens: 2048,  // gpt-4o on GitHub Models: 8k total limit; leave ~5.5k for input
   });
 
   let res;
@@ -641,19 +641,44 @@ async function sendPlanMessage(sessionId, userText, onChunk, onDone, onError, on
     onDone(full, quota);
   };
 
+  // Trim conversation to fit within model context limits.
+  // Always keeps system messages; drops oldest non-system messages first.
+  // Rough estimate: 4 chars ≈ 1 token.
+  const TOKEN_BUDGETS = { copilot: 5500, aider: 5500, claude: 80000, gemini: 80000 };
+  const charBudget = (TOKEN_BUDGETS[agent] || 5500) * 4;
+
+  function trimmedMessages() {
+    const system = sess.messages.filter(m => m.role === 'system');
+    const chat   = sess.messages.filter(m => m.role !== 'system');
+    const systemChars = system.reduce((n, m) => n + m.content.length, 0);
+    let budget = charBudget - systemChars;
+    const kept = [];
+    for (let i = chat.length - 1; i >= 0; i--) {
+      const len = chat[i].content.length;
+      if (budget - len < 500 && kept.length > 0) break;  // keep at least 500 chars headroom
+      kept.unshift(chat[i]);
+      budget -= len;
+    }
+    if (kept.length < chat.length) {
+      kept.unshift({ role: 'user', _internal: true,
+        content: '[Note: earlier conversation was trimmed to fit the context window. Continue from the current state of the planning session.]' });
+    }
+    return [...system, ...kept];
+  }
+
   const agent = sess.agent;
   if (agent === 'copilot') {
-    await streamCopilot(sess.messages, sess.config, accChunk, accDone, onError);
+    await streamCopilot(trimmedMessages(), sess.config, accChunk, accDone, onError);
   } else if (agent === 'claude') {
-    await streamClaude(sess.messages, sess.config, accChunk, accDone, onError);
+    await streamClaude(trimmedMessages(), sess.config, accChunk, accDone, onError);
   } else if (agent === 'gemini') {
-    await streamGemini(sess.messages, sess.config, accChunk, accDone, onError);
+    await streamGemini(trimmedMessages(), sess.config, accChunk, accDone, onError);
   } else {
     // aider: fall back to claude if key present, else copilot
     if (sess.config.anthropicApiKey) {
-      await streamClaude(sess.messages, sess.config, accChunk, accDone, onError);
+      await streamClaude(trimmedMessages(), sess.config, accChunk, accDone, onError);
     } else {
-      await streamCopilot(sess.messages, sess.config, accChunk, accDone, onError);
+      await streamCopilot(trimmedMessages(), sess.config, accChunk, accDone, onError);
     }
   }
 }
