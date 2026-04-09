@@ -1190,8 +1190,8 @@ function updateQuotaBadge(remaining, limit, provider) {
   else                badge.classList.add('quota-low');
   const pctStr = (pct * 100).toFixed(1) + '%';
   const countStr = lim > 0 ? `${rem.toLocaleString()}/${lim.toLocaleString()}` : `${rem.toLocaleString()}`;
-  badge.textContent = `${countStr} requests left`;
-  badge.title = `${provider || 'API'}: ${countStr} requests remaining (${pctStr}) in current window`;
+  badge.textContent = `${pctStr} left`;
+  badge.title = `${provider || 'API'}: ${countStr} requests remaining in current window`;
 }
 
 
