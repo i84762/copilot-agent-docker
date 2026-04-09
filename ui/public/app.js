@@ -339,6 +339,8 @@ function enterState(newState) {
     const title = $('terminalTitle');
     if (title) title.textContent = 'Idle';
     hidePlanStepper();
+    $('headerModelSelect')?.classList.add('hidden');
+    _chatHeaderAgent = '';
   }
   // Only hide quota badge when truly idle (no active session)
   if (newState === 'idle') {
@@ -689,6 +691,7 @@ async function fetchModels(agent) {
       select.value = prevValue;
     }
     saveForm();
+    syncHeaderModelSelect(); // keep header in sync if we're in a chat session
   } catch (e) {
     // On error, remove the loading option and show a brief error
     loadingOpt.remove();
@@ -1352,17 +1355,73 @@ const PLANNING_STEPS = [
   { id: 'plan',         label: 'Final Plan',         icon: '✅' },
 ];
 
+let _chatHeaderAgent = '';
+
 function updateChatHeader(agent, model) {
-  const icon = AGENT_ICONS[(agent || '').toLowerCase()] || '🤖';
-  const name = (agent || 'Agent').replace(/^\w/, c => c.toUpperCase());
-  const modelStr = model ? ` · ${model}` : '';
+  _chatHeaderAgent = agent || '';
+  const icon = AGENT_ICONS[_chatHeaderAgent.toLowerCase()] || '🤖';
+  const name = (_chatHeaderAgent || 'Agent').replace(/^\w/, c => c.toUpperCase());
   const title = $('terminalTitle');
   if (title) {
-    title.innerHTML = `<span style="margin-right:5px">${icon}</span>${name}<span style="font-size:10px;opacity:.6;margin-left:6px;font-family:var(--mono)">${modelStr}</span>`;
+    title.innerHTML = `<span style="margin-right:5px">${icon}</span>${name}`;
   }
+
+  // Populate the inline model select from the config panel's model dropdown
+  const headerSel = $('headerModelSelect');
+  if (headerSel) {
+    const srcSelId = { copilot: 'copilotModel', claude: 'claudeModel', gemini: 'geminiModel' }[_chatHeaderAgent];
+    const srcSel = srcSelId ? $(srcSelId) : null;
+    headerSel.innerHTML = '';
+    if (srcSel && srcSel.options.length) {
+      [...srcSel.options].forEach(o => {
+        const opt = document.createElement('option');
+        opt.value = o.value;
+        opt.textContent = o.textContent;
+        headerSel.appendChild(opt);
+      });
+      headerSel.value = model || srcSel.value;
+    } else if (model) {
+      const opt = document.createElement('option');
+      opt.value = model; opt.textContent = model;
+      headerSel.appendChild(opt);
+      headerSel.value = model;
+    }
+    headerSel.classList.toggle('hidden', !srcSel && !model);
+  }
+
   updateQuotaBadge(null, null, null);
   initPlanStepper();
 }
+
+// Keep header model select in sync when config panel model is refreshed
+function syncHeaderModelSelect() {
+  if (!_chatHeaderAgent) return;
+  const headerSel = $('headerModelSelect');
+  if (!headerSel || headerSel.classList.contains('hidden')) return;
+  const srcSelId = { copilot: 'copilotModel', claude: 'claudeModel', gemini: 'geminiModel' }[_chatHeaderAgent];
+  const srcSel = srcSelId ? $(srcSelId) : null;
+  if (!srcSel) return;
+  const prev = headerSel.value;
+  headerSel.innerHTML = '';
+  [...srcSel.options].forEach(o => {
+    const opt = document.createElement('option');
+    opt.value = o.value; opt.textContent = o.textContent;
+    headerSel.appendChild(opt);
+  });
+  headerSel.value = prev || srcSel.value;
+}
+
+// When user picks a model from the header select, notify the server
+$('headerModelSelect')?.addEventListener('change', () => {
+  const model = $('headerModelSelect').value;
+  if (!model) return;
+  // Mirror into config panel select
+  const srcSelId = { copilot: 'copilotModel', claude: 'claudeModel', gemini: 'geminiModel' }[_chatHeaderAgent];
+  if (srcSelId && $(srcSelId)) $(srcSelId).value = model;
+  saveForm();
+  wsSend({ type: 'switch_model', model });
+  toast(`Model switched to ${model}`, 'success');
+});
 
 // ── Planning stepper ──────────────────────────────────────────────────────────
 

@@ -340,6 +340,27 @@ select.input-field { cursor: pointer; appearance: none; background-image: url("d
 .terminal-title.active-plan { color: var(--purple); }
 .terminal-title.active-run  { color: var(--green); }
 
+/* Inline model switcher in the toolbar header */
+.header-model-select {
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 10px;
+  font-family: var(--mono);
+  padding: 2px 18px 2px 6px;
+  margin-left: 4px;
+  max-width: 220px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%23848d97' d='M1 0l4 4 4-4z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 5px center;
+  transition: border-color 0.15s, color 0.15s;
+}
+.header-model-select:hover { border-color: var(--blue-dim); color: var(--text); }
+.header-model-select option { background: var(--surface); color: var(--text); }
+
 .terminal-tools { display: flex; gap: 6px; }
 
 #terminal {

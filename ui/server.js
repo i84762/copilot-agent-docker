@@ -855,6 +855,20 @@ wss.on('connection', ws => {
         break;
       }
 
+      // ── Switch model mid-session ──────────────────────────────────────────
+      case 'switch_model': {
+        if (!activePlanSessionId || !msg.model) break;
+        const sess = llmPlan.getSession(activePlanSessionId);
+        if (!sess) break;
+        sess.config.model = msg.model;
+        devLog(`[switch_model] → ${msg.model}`);
+        // Persist to config file so the selection is remembered
+        const cfg = readServerConfig();
+        cfg.model = msg.model;
+        writeServerConfig(cfg);
+        break;
+      }
+
       // ── Send keyboard input to plan terminal (legacy / fallback) ──────────
       case 'terminal_input': {
         if (containerStream && msg.data) {
