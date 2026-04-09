@@ -373,6 +373,10 @@ wss.on('connection', ws => {
   let logStream       = null;
   let containerStream = null; // plan mode interactive stream
   let activeId        = null;
+  // Chat state — shared between plan_container and chat_input cases
+  let agentReady      = false;
+  let agentTyping     = false;
+  let chatDebounce    = null;
   // Dev logs: streamed to client AND printed to server stdout for terminal visibility
   function devLog(text) {
     const ts = new Date().toISOString().slice(11, 23);
@@ -555,19 +559,21 @@ wss.on('connection', ws => {
           devLog(`[plan] PTY attached — starting container`);
 
           // ── All agents → chat UI (ANSI stripped, debounced bubbles) ──────────
-          // Every agent — including TUI apps like copilot and aider — is routed
-          // through the chat UI. ANSI/TUI escape sequences are stripped server-side
-          // so the user always sees clean text bubbles, never a raw terminal.
-          let agentTyping    = false;
-          let chatDebounce   = null;
-          const DEBOUNCE_MS  = 1500;
+          // Route all output through chat UI. Output BEFORE the initial planning
+          // message is sent (entrypoint.sh startup banner, copilot TUI init) goes
+          // only to devLog so the chat stays clean. Once agentReady=true, all
+          // visible text is forwarded to chat bubbles.
+          agentReady  = false;
+          agentTyping = false;
+          if (chatDebounce) { clearTimeout(chatDebounce); chatDebounce = null; }
+          const DEBOUNCE_MS  = 2000;
 
           containerStream.on('data', chunk => {
             const rawBytes = chunk.length;
             const raw  = chunk.toString('utf8');
             const text = stripAnsi(raw);
-            devLog(`[plan stream] ${rawBytes}b → ${text.length}ch visible`);
-            if (!text) return;
+            devLog(`[plan stream] ${rawBytes}b → ${text.length}ch visible${agentReady ? '' : ' (startup, suppressed)'}`);
+            if (!agentReady || !text) return;
 
             // Signal typing indicator on first chunk of a new message
             if (!agentTyping) {
@@ -672,29 +678,39 @@ wss.on('connection', ws => {
           };
 
           if (planAgent === 'copilot') {
+            // Step 1 (15s): send /allow-all to grant filesystem permissions
             setTimeout(() => {
               if (containerStream) {
                 devLog('[plan auto-setup] sending /allow-all');
                 containerStream.write(Buffer.from('/allow-all\n'));
               }
-            }, 10000);
+            }, 15000);
+            // Step 2 (20s): write brief + send trigger + flip agentReady
             setTimeout(async () => {
               await writeBrief();
               if (containerStream) {
-                devLog('[plan auto-setup] sending initial planning message (single-line trigger)');
+                devLog('[plan auto-setup] sending initial planning message');
+                agentReady = true;
+                safeSend(ws, { type: 'chat_system', text: '🔍 Agent is now exploring your project — this may take several minutes…' });
+                safeSend(ws, { type: 'chat_typing' });
+                agentTyping = true;
                 containerStream.write(Buffer.from(
                   'Please read /workspace/.planning-brief.md and follow all instructions in it exactly. ' +
                   'Start by running the exploration commands listed there before writing your first response.\n'
                 ));
               }
-            }, 13000);
+            }, 20000);
           } else {
             // claude/gemini/aider: write brief then send single-line trigger
             const delay = planAgent === 'claude' ? 4000 : 5000;
             setTimeout(async () => {
               await writeBrief();
               if (containerStream) {
-                devLog('[plan auto-setup] sending initial planning message (single-line trigger)');
+                devLog('[plan auto-setup] sending initial planning message');
+                agentReady = true;
+                safeSend(ws, { type: 'chat_system', text: '🔍 Agent is now exploring your project…' });
+                safeSend(ws, { type: 'chat_typing' });
+                agentTyping = true;
                 containerStream.write(Buffer.from(
                   'Please read /workspace/.planning-brief.md and follow all instructions in it exactly. ' +
                   'Start by running the exploration commands listed there before writing your first response.\n'
@@ -719,6 +735,13 @@ wss.on('connection', ws => {
         if (containerStream && msg.text) {
           try {
             devLog(`[chat_input] ${msg.text.slice(0, 120)}`);
+            // Ensure agent is in ready mode (user reply always enables output)
+            agentReady = true;
+            // Show typing indicator immediately so user gets feedback
+            if (!agentTyping) {
+              agentTyping = true;
+              safeSend(ws, { type: 'chat_typing' });
+            }
             containerStream.write(Buffer.from(msg.text + '\n'));
           } catch (err) {
             safeSend(ws, { type: 'error', message: `Chat input: ${err.message}` });
