@@ -610,7 +610,7 @@ wss.on('connection', ws => {
             : planAgent === 'claude' ? 'Claude Opus'
             : planAgent === 'gemini' ? 'Gemini 2.0 Flash'
             : planAgent === 'aider'  ? 'Aider (Claude/Copilot)' : '';
-          safeSend(ws, { type: 'container_started', containerId: virtualId, mode: 'plan', agent: planAgent, model: modelLabel });
+          safeSend(ws, { type: 'container_started', containerId: virtualId, mode: 'plan', agent: planAgent, model: modelLabel, resumed: planResult.resumed });
 
           const onStepChange = (stepId, done) => {
             safeSend(ws, { type: 'plan_step', stepId, done });
@@ -621,10 +621,13 @@ wss.on('connection', ws => {
             // Restore stepper state from saved session
             planResult.completedSteps.forEach(sid => onStepChange(sid, true));
             onStepChange(planResult.currentStep, false);
+            // Send saved chat history to client for display
+            const history = llmPlan.getSessionHistory(activePlanSessionId);
+            if (history.length) safeSend(ws, { type: 'chat_history', messages: history });
             // Tell the agent to continue from where it left off
             const stepDef = llmPlan.PLANNING_STEPS.find(s => s.id === planResult.currentStep);
             const resumeMsg = `We are resuming our planning session. We were on Step: ${stepDef?.label || planResult.currentStep}. Please briefly summarize where we left off and continue from that point.`;
-            safeSend(ws, { type: 'chat_system', text: `📂 Planning session restored — resuming from **${stepDef?.label || planResult.currentStep}**` });
+            safeSend(ws, { type: 'chat_system', text: `📂 Resumed from **${stepDef?.label || planResult.currentStep}** — ${history.length} messages restored` });
             safeSend(ws, { type: 'chat_typing' });
             agentTyping = true;
             llmPlan.sendPlanMessage(activePlanSessionId, resumeMsg,
@@ -639,7 +642,8 @@ wss.on('connection', ws => {
                 safeSend(ws, { type: 'chat_system', text: `⚠️ LLM API error: ${err.message}` });
                 safeSend(ws, { type: 'chat_message_end' });
               },
-              onStepChange
+              onStepChange,
+              true  // internal — don't show this in history
             );
           } else {
             // Fresh session — kick off Step 1
@@ -666,7 +670,8 @@ wss.on('connection', ws => {
                 safeSend(ws, { type: 'chat_system', text: `⚠️ LLM API error: ${err.message}` });
                 safeSend(ws, { type: 'chat_message_end' });
               },
-              onStepChange
+              onStepChange,
+              true  // internal — hide from history
             );
           }
 

@@ -159,6 +159,22 @@ function connectWS() {
         break;
       }
 
+      case 'chat_history': {
+        // Render saved messages from a resumed planning session
+        const msgs = msg.messages || [];
+        msgs.forEach(m => {
+          if (m.role === 'user') {
+            appendChatBubble('user', m.content);
+          } else if (m.role === 'assistant' && m.content) {
+            const bubble = appendChatBubble('agent');
+            bubble._rawText = m.content;
+            renderBubbleMarkdown(bubble, false);
+          }
+        });
+        scrollChatToBottom();
+        break;
+      }
+
       case 'quota_update': {
         updateQuotaBadge(msg.remaining, msg.limit, msg.provider);
         break;
@@ -201,10 +217,10 @@ function connectWS() {
         setActiveContainerLabel(msg.containerId);
         if (msg.mode === 'plan') {
           enterState('planning');
-          // Populate chat header with agent info
           updateChatHeader(msg.agent, msg.model);
-          // Show welcome system message in chat
-          appendChatBubble('system', '🗺 Planning session started. The agent is analyzing your project…');
+          if (!msg.resumed) {
+            appendChatBubble('system', '🗺 Planning session started. The agent is analyzing your project…');
+          }
           scrollChatToBottom();
           // Still sync PTY size for the underlying terminal process
           sendResize();
@@ -1253,7 +1269,8 @@ function initPlanStepper() {
     const el = document.createElement('div');
     el.className = 'ps-step ps-pending';
     el.id = `ps-${step.id}`;
-    el.innerHTML = `<span class="ps-icon">${step.icon}</span><span class="ps-label">${step.label}</span>`;
+    el.title = step.label;  // shown as tooltip on hover
+    el.innerHTML = `<span class="ps-icon">${step.icon}</span>`;
     track.appendChild(el);
   });
   stepper.classList.remove('hidden');

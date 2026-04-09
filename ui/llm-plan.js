@@ -555,11 +555,11 @@ function startPlanSession(config, resume = false) {
  * onStep(stepId, done) is called when the agent emits <STEP:x> or <STEP_DONE:x> tags.
  * Step tags are stripped from the visible output.
  */
-async function sendPlanMessage(sessionId, userText, onChunk, onDone, onError, onStep) {
+async function sendPlanMessage(sessionId, userText, onChunk, onDone, onError, onStep, internal = false) {
   const sess = getSession(sessionId);
   if (!sess) { onError(new Error('Planning session not found')); return; }
 
-  sess.messages.push({ role: 'user', content: userText });
+  sess.messages.push({ role: 'user', content: userText, ...(internal ? { _internal: true } : {}) });
 
   let full = '';
   let tagBuf = '';  // accumulates partial tag text between chunks
@@ -636,4 +636,18 @@ function extractFinalPlan(sessionId) {
   return match ? match[1].trim() : null;
 }
 
-module.exports = { startPlanSession, sendPlanMessage, extractFinalPlan, deleteSession, getSession, getSavedSessionMeta, deleteSavedSession, PLANNING_STEPS };
+const STRIP_TAGS_RE = /<\/?STEP[^>]*>|<\/?STEP_DONE[^>]*>|<PLAN_START>|<PLAN_END>/g;
+
+/**
+ * Returns the conversation history for display, filtering out system
+ * prompt messages and internal kickoff messages, and stripping step tags.
+ */
+function getSessionHistory(sessionId) {
+  const sess = getSession(sessionId);
+  if (!sess) return [];
+  return sess.messages
+    .filter(m => m.role !== 'system' && !m._internal)
+    .map(m => ({ role: m.role, content: m.content.replace(STRIP_TAGS_RE, '').trim() }));
+}
+
+module.exports = { startPlanSession, sendPlanMessage, extractFinalPlan, getSessionHistory, deleteSession, getSession, getSavedSessionMeta, deleteSavedSession, PLANNING_STEPS };
