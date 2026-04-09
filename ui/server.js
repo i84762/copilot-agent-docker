@@ -373,6 +373,7 @@ wss.on('connection', ws => {
   let logStream       = null;
   let containerStream = null; // plan mode interactive stream
   let activeId        = null;
+  let activePlanAgent = 'copilot'; // track agent type for correct line ending
   // Chat state — shared between plan_container and chat_input cases
   let agentReady      = false;
   let agentTyping     = false;
@@ -551,6 +552,7 @@ wss.on('connection', ws => {
 
           // Declare planAgent early — needed by the stream handler below
           const planAgent = (msg.config?.agent || 'copilot').toLowerCase();
+          activePlanAgent = planAgent;
 
           stepP('attach',   'Attaching interactive PTY',   'active');
           containerStream = await container.attach({
@@ -682,7 +684,7 @@ wss.on('connection', ws => {
             setTimeout(() => {
               if (containerStream) {
                 devLog('[plan auto-setup] sending /allow-all');
-                containerStream.write(Buffer.from('/allow-all\n'));
+                containerStream.write(Buffer.from('/allow-all\r'));
               }
             }, 15000);
             // Step 2 (20s): write brief + send trigger + flip agentReady
@@ -696,7 +698,7 @@ wss.on('connection', ws => {
                 agentTyping = true;
                 containerStream.write(Buffer.from(
                   'Please read /workspace/.planning-brief.md and follow all instructions in it exactly. ' +
-                  'Start by running the exploration commands listed there before writing your first response.\n'
+                  'Start by running the exploration commands listed there before writing your first response.\r'
                 ));
               }
             }, 20000);
@@ -742,7 +744,10 @@ wss.on('connection', ws => {
               agentTyping = true;
               safeSend(ws, { type: 'chat_typing' });
             }
-            containerStream.write(Buffer.from(msg.text + '\n'));
+            // copilot and aider are TUI apps running in raw PTY mode — they expect
+            // \r (Enter key) not \n to submit a message. Claude/Gemini use line mode (\n).
+            const lineEnd = (activePlanAgent === 'copilot' || activePlanAgent === 'aider') ? '\r' : '\n';
+            containerStream.write(Buffer.from(msg.text + lineEnd));
           } catch (err) {
             safeSend(ws, { type: 'error', message: `Chat input: ${err.message}` });
           }
