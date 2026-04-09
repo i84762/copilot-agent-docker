@@ -179,11 +179,16 @@ async function streamCopilot(messages, config, onChunk, onDone, onError) {
   const token = config.ghToken;
   if (!token) { onError(new Error('GH_TOKEN not configured')); return; }
 
+  const model = config.model || 'gpt-4o';
+  // o1 models don't support streaming or system messages
+  const isO1 = model.startsWith('o1');
+  const msgsToSend = isO1 ? messages.filter(m => m.role !== 'system') : messages;
+
   const body = JSON.stringify({
-    model:    'gpt-4o',
-    messages,
-    stream:   true,
-    max_tokens: 2048,  // gpt-4o on GitHub Models: 8k total limit; leave ~5.5k for input
+    model,
+    messages: msgsToSend,
+    stream:   !isO1,
+    max_tokens: isO1 ? 4096 : 2048,
   });
 
   let res;
@@ -235,7 +240,7 @@ async function streamClaude(messages, config, onChunk, onDone, onError) {
   const chatMsgs  = messages.filter(m => m.role !== 'system');
 
   const body = JSON.stringify({
-    model:      'claude-opus-4-5',
+    model:      config.model || 'claude-opus-4-5',
     system:     systemMsg?.content || '',
     messages:   chatMsgs,
     stream:     true,
@@ -299,7 +304,8 @@ async function streamGemini(messages, config, onChunk, onDone, onError) {
     generationConfig: { maxOutputTokens: 4096 },
   });
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent?key=${apiKey}&alt=sse`;
+  const geminiModel = config.model || 'gemini-2.0-flash';
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:streamGenerateContent?key=${apiKey}&alt=sse`;
   let res;
   try {
     res = await fetch(url, {
@@ -645,8 +651,15 @@ async function sendPlanMessage(sessionId, userText, onChunk, onDone, onError, on
   // Always keeps system messages; drops oldest non-system messages first.
   // Rough estimate: 4 chars ≈ 1 token.
   const agent = sess.agent;
-  const TOKEN_BUDGETS = { copilot: 5500, aider: 5500, claude: 80000, gemini: 80000 };
-  const charBudget = (TOKEN_BUDGETS[agent] || 5500) * 4;
+  // Token budgets by model (rough input budget; 4 chars ≈ 1 token)
+  const model = sess.config.model || '';
+  const MODEL_BUDGETS = {
+    'gpt-4o': 5500, 'gpt-4o-mini': 5500, 'o1-mini': 20000, 'o1': 80000,
+    'Meta-Llama-3.1-405B-Instruct': 20000, 'Mistral-Large-2411': 20000,
+  };
+  const AGENT_BUDGETS = { copilot: 5500, aider: 5500, claude: 80000, gemini: 80000 };
+  const TOKEN_BUDGETS = MODEL_BUDGETS[model] || AGENT_BUDGETS[agent] || 5500;
+  const charBudget = TOKEN_BUDGETS * 4;
 
   function trimmedMessages() {
     const system = sess.messages.filter(m => m.role === 'system');

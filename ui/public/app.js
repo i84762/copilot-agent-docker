@@ -527,9 +527,11 @@ function clearFieldErrors() {
 
 function getConfig() {
   const agent = $('agent').value;
+  const modelMap = { copilot: 'copilotModel', claude: 'claudeModel', gemini: 'geminiModel' };
   return {
     projectPath:          $('projectPath').value.trim(),
     agent:                agent,
+    model:                $(modelMap[agent])?.value || '',
     ghToken:              $('ghToken')?.value.trim() || '',
     anthropicApiKey:      agent === 'aider' ? ($('anthropicApiKey2')?.value.trim() || '') : ($('anthropicApiKey')?.value.trim() || ''),
     geminiApiKey:         agent === 'aider' ? ($('geminiApiKey2')?.value.trim() || '') : ($('geminiApiKey')?.value.trim() || ''),
@@ -603,6 +605,7 @@ function validateConfig() {
 
 const ALL_FIELDS = [
   'agent',
+  'copilotModel','claudeModel','geminiModel',
   'ghToken','anthropicApiKey','geminiApiKey','openaiApiKey',
   'anthropicApiKey2','geminiApiKey2','aiderModel',
   'instructionsRepo','instructionsFile','instructionsBranch',

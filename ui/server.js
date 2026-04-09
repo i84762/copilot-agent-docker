@@ -606,10 +606,12 @@ wss.on('connection', ws => {
           safeSend(ws, { type: 'progress_done' });
           const virtualId  = `plan-api-${Date.now()}`;
           activeId = virtualId;
-          const modelLabel = planAgent === 'copilot' ? 'gpt-4o (GitHub Models)'
-            : planAgent === 'claude' ? 'Claude Opus'
-            : planAgent === 'gemini' ? 'Gemini 2.0 Flash'
-            : planAgent === 'aider'  ? 'Aider (Claude/Copilot)' : '';
+          const selectedModel = msg.config?.model || '';
+          const modelLabel = selectedModel ||
+            (planAgent === 'copilot' ? 'gpt-4o'
+            : planAgent === 'claude' ? 'claude-opus-4-5'
+            : planAgent === 'gemini' ? 'gemini-2.0-flash'
+            : planAgent === 'aider'  ? 'Aider' : '');
           safeSend(ws, { type: 'container_started', containerId: virtualId, mode: 'plan', agent: planAgent, model: modelLabel, resumed: planResult.resumed });
 
           const onStepChange = (stepId, done) => {
