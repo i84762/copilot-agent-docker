@@ -605,9 +605,11 @@ wss.on('connection', ws => {
 
           // Send the first message automatically
           const initialMsg =
-            'Please start by analyzing the task and codebase deeply. ' +
-            'Run thorough exploration, identify all gaps and ambiguities, ' +
-            'and return your structured analysis with clarifying questions before writing the plan.';
+            'Please analyze the task and codebase context provided in the system prompt. ' +
+            'You have the project files inline above — no need to run any commands. ' +
+            'Provide your structured analysis: project overview, requirements breakdown, ' +
+            'gaps & ambiguities, technical risks, and your clarifying questions. ' +
+            'Do NOT write code or produce a final plan yet — just the analysis and questions.';
 
           safeSend(ws, { type: 'chat_typing' });
           agentTyping = true;

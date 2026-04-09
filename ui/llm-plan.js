@@ -96,30 +96,35 @@ function buildSystemPrompt(config, projectContext) {
   return `You are Archon, an expert AI software engineer and technical architect.
 You are engaged in an intensive PLANNING SESSION for: "${name}".
 
+## IMPORTANT — You are a text-only planning assistant
+You do NOT have shell access, tool calls, or the ability to run commands.
+All project context you need is embedded below in "Project Files".
+Read it carefully and reason from it directly. Do not ask to run anything.
+
 ## Your Role
-You are NOT here to give a quick summary. Your job is to conduct a thorough, 
-professional planning session before any code is written. This means:
-1. ANALYZE the task and existing codebase deeply
+Conduct a thorough, professional planning session before any code is written:
+1. ANALYZE the task and existing codebase using the files provided below
 2. ASK targeted clarifying questions about anything unclear or ambiguous
 3. IDENTIFY technical risks, edge cases, and dependencies
-4. PROPOSE a detailed implementation plan with concrete steps
+4. PROPOSE a detailed implementation plan with concrete milestones
 5. VALIDATE the plan with the user before declaring it ready
 
 ## Task / Requirements
 ${task}
 
-## Project Files
+## Project Files (read from disk — your entire codebase context)
 ${projectContext || '(No project files found — this may be a new project)'}
 
 ## Instructions
 - Ask questions proactively. Do not assume. Surface all ambiguities.
-- When proposing architecture, explain WHY you chose each approach.
+- Explain WHY you chose each architectural approach.
 - List risks and how you will mitigate them.
 - Break work into small, testable milestones.
-- When you and the user are satisfied, output the final plan wrapped in:
+- Respond in clear markdown. Be thorough but structured.
+- When you and the user are satisfied with the plan, output it wrapped in:
   <PLAN_START>
   ...full detailed plan...
-  </PLAN_END>
+  <PLAN_END>
 - Until that tag is used, this is still an active planning discussion.`;
 }
 
@@ -251,11 +256,24 @@ async function consumeSSE(res, onChunk, onDone, onError) {
   const reader  = res.body.getReader();
   const decoder = new TextDecoder();
   let   buf     = '';
+  let   gotContent = false;
+
+  // Stall timeout: if no data arrives for 60s, give up
+  let stallTimer = null;
+  const resetStall = () => {
+    if (stallTimer) clearTimeout(stallTimer);
+    stallTimer = setTimeout(() => {
+      reader.cancel().catch(() => {});
+      onError(new Error('LLM stream timed out after 60s of silence'));
+    }, 60000);
+  };
+  resetStall();
 
   try {
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
+      resetStall();
       buf += decoder.decode(value, { stream: true });
 
       const lines = buf.split('\n');
@@ -264,16 +282,29 @@ async function consumeSSE(res, onChunk, onDone, onError) {
       for (const line of lines) {
         if (!line.startsWith('data: ')) continue;
         const data = line.slice(6).trim();
-        if (data === '[DONE]') { onDone(); return; }
+        if (data === '[DONE]') { clearTimeout(stallTimer); onDone(); return; }
         try {
           const obj  = JSON.parse(data);
           const text = obj.choices?.[0]?.delta?.content;
-          if (text) onChunk(text);
+          if (text) { gotContent = true; onChunk(text); }
+          // Detect finish_reason to end cleanly even if [DONE] is missing
+          const finish = obj.choices?.[0]?.finish_reason;
+          if (finish && finish !== 'null' && finish !== null) {
+            // If model used tool_calls without any content, surface an error
+            if (!gotContent && finish === 'tool_calls') {
+              clearTimeout(stallTimer);
+              onError(new Error('Model attempted tool_calls (not supported in planning mode). Try the Claude agent instead.'));
+              return;
+            }
+            clearTimeout(stallTimer); onDone(); return;
+          }
         } catch { /* skip malformed */ }
       }
     }
+    clearTimeout(stallTimer);
     onDone();
   } catch (e) {
+    clearTimeout(stallTimer);
     onError(e);
   } finally {
     reader.releaseLock();
@@ -286,10 +317,21 @@ async function consumeSSEAnthropic(res, onChunk, onDone, onError) {
   const decoder = new TextDecoder();
   let   buf     = '';
 
+  let stallTimer = null;
+  const resetStall = () => {
+    if (stallTimer) clearTimeout(stallTimer);
+    stallTimer = setTimeout(() => {
+      reader.cancel().catch(() => {});
+      onError(new Error('Anthropic stream timed out after 60s of silence'));
+    }, 60000);
+  };
+  resetStall();
+
   try {
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
+      resetStall();
       buf += decoder.decode(value, { stream: true });
 
       const lines = buf.split('\n');
@@ -306,13 +348,15 @@ async function consumeSSEAnthropic(res, onChunk, onDone, onError) {
             const text = obj.delta?.text;
             if (text) onChunk(text);
           } else if (lastEvent === 'message_stop') {
-            onDone(); return;
+            clearTimeout(stallTimer); onDone(); return;
           }
         } catch { /* skip */ }
       }
     }
+    clearTimeout(stallTimer);
     onDone();
   } catch (e) {
+    clearTimeout(stallTimer);
     onError(e);
   } finally {
     reader.releaseLock();
