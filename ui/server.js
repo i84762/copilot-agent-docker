@@ -564,43 +564,58 @@ wss.on('connection', ws => {
           stepP('create',   'Container started',           'ok');
           stepP('attach',   'Interactive session ready',   'ok');
 
-          // ── Auto-setup: grant permissions then send initial task ──────────
-          const planAgent = (msg.config?.agent || 'copilot').toLowerCase();
-          const planTask  = (msg.config?.task  || '').trim();
+          // ── Auto-setup: grant permissions then send initial planning message ─
+          const planAgent    = (msg.config?.agent    || 'copilot').toLowerCase();
+          const planTask     = (msg.config?.task     || '').trim();
+          const planTaskFile = (msg.config?.taskFile || '').trim();
 
-          // Build planning prompt to auto-send after agent is ready
-          const PLAN_PREFIX =
-            'You are in PLANNING MODE. Do NOT write any code yet.\n\n' +
-            'Start by greeting me and exploring the project structure, then ask clarifying questions.\n\n' +
-            'Task:\n';
+          // Build rich initial message. The instructions file (written by plan-mode.sh)
+          // provides the system context / "how to behave"; this message provides the WHAT.
+          let taskBlock = '';
+          if (planTask) taskBlock += '## Task / Requirements\n\n' + planTask + '\n\n';
+          if (planTaskFile) {
+            taskBlock += '## Additional requirements file\n\nA requirements file was provided at: `' +
+              planTaskFile + '`\n' +
+              'Please read it: `cat "/workspace/' + planTaskFile.replace(/\\/g, '/').replace(/^[A-Za-z]:\//, '') + '" 2>/dev/null`\n\n';
+          }
+          if (!taskBlock) taskBlock = '## Task\n\n(No task provided — please ask the user what they want to build.)\n\n';
+
+          const INITIAL_PLAN_MSG = taskBlock +
+            '## Begin now\n\n' +
+            'Start your deep exploration immediately before asking me anything:\n' +
+            '1. Explore the full codebase structure and architecture\n' +
+            '2. Read all requirement/task/spec documents found in /workspace\n' +
+            '3. Check git history, existing patterns, key components\n' +
+            '4. Then return ONE structured analysis covering:\n' +
+            '   - Project overview (tech stack, architecture, key files)\n' +
+            '   - Your understanding of the requirements\n' +
+            '   - ALL gaps, ambiguities, missing information (numbered list)\n' +
+            '   - Technical risks and concerns\n' +
+            '   - Suggestions and improvements you would recommend\n' +
+            '   - Numbered clarifying questions I must answer before you write the plan\n\n' +
+            'Do NOT write code. Do NOT write PLAN.md yet. Explore first.';
 
           if (planAgent === 'copilot') {
-            // Copilot needs ~10s to load before we can send /allow-all
             setTimeout(() => {
               if (containerStream) {
                 devLog('[plan auto-setup] sending /allow-all');
                 containerStream.write(Buffer.from('/allow-all\n'));
               }
             }, 10000);
-            if (planTask) {
-              setTimeout(() => {
-                if (containerStream) {
-                  devLog('[plan auto-setup] sending initial task');
-                  containerStream.write(Buffer.from(PLAN_PREFIX + planTask + '\n'));
-                }
-              }, 13000);
-            }
+            setTimeout(() => {
+              if (containerStream) {
+                devLog('[plan auto-setup] sending initial planning message');
+                containerStream.write(Buffer.from(INITIAL_PLAN_MSG + '\n'));
+              }
+            }, 13000);
           } else {
-            // Claude, Gemini, Aider: shorter startup; no /allow-all needed
-            if (planTask) {
-              const delay = planAgent === 'claude' ? 4000 : 5000;
-              setTimeout(() => {
-                if (containerStream) {
-                  devLog('[plan auto-setup] sending initial task');
-                  containerStream.write(Buffer.from(PLAN_PREFIX + planTask + '\n'));
-                }
-              }, delay);
-            }
+            const delay = planAgent === 'claude' ? 4000 : 5000;
+            setTimeout(() => {
+              if (containerStream) {
+                devLog('[plan auto-setup] sending initial planning message');
+                containerStream.write(Buffer.from(INITIAL_PLAN_MSG + '\n'));
+              }
+            }, delay);
           }
 
           safeSend(ws, { type: 'progress_done' });

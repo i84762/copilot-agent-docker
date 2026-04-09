@@ -94,14 +94,51 @@ export INITIAL_PROMPT="$TASK"
 if [ "$MODE" = "resume" ] && [ -n "$RESUME_PROMPT" ]; then
     export INITIAL_PROMPT="$RESUME_PROMPT"
     log "Using resume context as initial prompt"
-elif [ "$MODE" = "planned" ] && [ -f /workspace/PLAN.md ]; then
-    export INITIAL_PROMPT="Execute the plan in PLAN.md completely and autonomously.
+elif [ -f /workspace/PLAN.md ]; then
+    # A plan exists — use it regardless of mode flag so execution is always plan-driven
+    PLAN_CONTENT=$(cat /workspace/PLAN.md)
+    export INITIAL_PROMPT="## Your mission
 
-$(cat /workspace/PLAN.md)
+Execute the following plan **completely and autonomously** until every milestone is done.
 
-Work through each milestone in order. Commit after each one. Run tests.
-When all milestones are done, run generate-report."
-    log "Using PLAN.md as initial prompt"
+### Rules
+- Work through milestones **in order**. Do not skip any step.
+- Each milestone must meet its acceptance criteria before moving to the next.
+- Commit with a descriptive message after each milestone.
+- Run tests after every milestone. Fix failures before continuing.
+- **Do NOT stop to ask questions.** If you encounter ambiguity, make the best reasonable choice and note it in a commit message.
+- **Do NOT stop until ALL milestones are complete** and generate-report has been run.
+- When fully done: run \`generate-report\`, commit, and push.
+
+---
+
+## PLAN.md
+
+${PLAN_CONTENT}
+
+---
+
+## Original Task (for context)
+
+${TASK}
+
+Begin now with Milestone 1."
+    log "Using PLAN.md as execution driver"
+else
+    # No plan — normal autonomous run
+    export INITIAL_PROMPT="## Task
+
+${TASK}
+
+## Execution rules
+- Work **autonomously and continuously** until ALL goals are fully implemented.
+- Do NOT stop to ask questions. Make reasonable decisions independently.
+- Commit progress frequently with descriptive messages.
+- Run tests after each significant change. Fix failures before continuing.
+- When done: run \`generate-report\`, commit, and push.
+
+Begin now."
+    log "No PLAN.md found — running in autonomous mode"
 fi
 
 # Shared tmux session name
