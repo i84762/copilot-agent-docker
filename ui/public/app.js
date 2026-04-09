@@ -64,6 +64,7 @@ let containerStartedAt = 0;  // timestamp when container_started was received
 let lastConfig        = null;       // config used for last run (for Execute Plan)
 let logBuffer         = '';         // raw log accumulation for download
 let containerRefreshTimer = null;
+let streamRenderTimer = null;       // debounce for incremental markdown render during streaming
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
 
@@ -132,20 +133,24 @@ function connectWS() {
           bubble = appendChatBubble('agent', '');
           bubble.id = 'currentAgentBubble';
         }
-        // Accumulate on the element itself for final markdown render
         bubble._rawText = (bubble._rawText || '') + msg.text;
-        // Stream as pre-text for immediate feedback
-        const textEl = bubble.querySelector('.bubble-text');
-        textEl.textContent = bubble._rawText;
+        // Debounce incremental markdown render (every 300ms while streaming)
+        if (!streamRenderTimer) {
+          streamRenderTimer = setTimeout(() => {
+            streamRenderTimer = null;
+            const b = document.getElementById('currentAgentBubble');
+            if (b && b._rawText) renderBubbleMarkdown(b, true);
+          }, 300);
+        }
         scrollChatToBottom();
         break;
       }
 
       case 'chat_message_end': {
+        if (streamRenderTimer) { clearTimeout(streamRenderTimer); streamRenderTimer = null; }
         const bubble = document.getElementById('currentAgentBubble');
         if (bubble && bubble._rawText) {
-          // Render accumulated text as markdown
-          renderBubbleMarkdown(bubble);
+          renderBubbleMarkdown(bubble, false);
         }
         if (bubble) bubble.removeAttribute('id');
         hideChatTyping();
@@ -766,30 +771,135 @@ function appendChatBubble(type, text = '') {
   const wrap = document.createElement('div');
   wrap.className = `chat-bubble chat-bubble-${type}`;
 
-  const textEl = document.createElement('pre');
-  textEl.className = 'bubble-text';
-  textEl.textContent = text;
-  wrap.appendChild(textEl);
+  if (type === 'agent' || type === 'user') {
+    // Header row: avatar + label + timestamp
+    const header = document.createElement('div');
+    header.className = 'bubble-header';
+
+    const avatar = document.createElement('span');
+    avatar.className = 'bubble-avatar';
+    avatar.textContent = type === 'agent' ? '🤖' : '👤';
+
+    const label = document.createElement('span');
+    label.className = 'bubble-label';
+    label.textContent = type === 'agent'
+      ? (lastConfig?.agent ? lastConfig.agent.charAt(0).toUpperCase() + lastConfig.agent.slice(1) : 'Agent')
+      : 'You';
+
+    const ts = document.createElement('span');
+    ts.className = 'bubble-ts';
+    ts.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    header.appendChild(avatar);
+    header.appendChild(label);
+    header.appendChild(ts);
+    wrap.appendChild(header);
+  }
+
+  if (type === 'agent') {
+    // Streaming placeholder — replaced by markdown on chat_message_end
+    const textEl = document.createElement('div');
+    textEl.className = 'bubble-text bubble-streaming';
+    if (text) textEl.textContent = text;
+    wrap.appendChild(textEl);
+  } else if (type === 'user') {
+    const textEl = document.createElement('div');
+    textEl.className = 'bubble-text';
+    textEl.textContent = text;
+    wrap.appendChild(textEl);
+  } else {
+    // system
+    const textEl = document.createElement('span');
+    textEl.className = 'bubble-text';
+    // Support emoji + markdown bold in system messages
+    textEl.innerHTML = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    wrap.appendChild(textEl);
+  }
+
   messages.appendChild(wrap);
   return wrap;
 }
 
-/**
- * Replace the streaming <pre> text in an agent bubble with rendered markdown.
- * Called once per agent message when chat_message_end arrives.
- */
-function renderBubbleMarkdown(bubble) {
-  const textEl = bubble.querySelector('.bubble-text');
-  if (!textEl || !bubble._rawText) return;
-  try {
-    const html = marked.parse(bubble._rawText, { breaks: true, gfm: true });
-    const div = document.createElement('div');
-    div.className = 'bubble-markdown';
-    div.innerHTML = html;
-    textEl.replaceWith(div);
-  } catch (_) {
-    // keep plain text if marked fails
+/** Section metadata for coloring agent response headings */
+const SECTION_STYLES = {
+  'project overview':       { icon: '📐', cls: 'section-blue' },
+  'requirements':           { icon: '📋', cls: 'section-blue' },
+  'requirements analysis':  { icon: '📋', cls: 'section-blue' },
+  'gaps':                   { icon: '⚠️',  cls: 'section-yellow' },
+  'gaps & ambiguities':     { icon: '⚠️',  cls: 'section-yellow' },
+  'ambiguities':            { icon: '⚠️',  cls: 'section-yellow' },
+  'technical risks':        { icon: '🔥', cls: 'section-red' },
+  'risks':                  { icon: '🔥', cls: 'section-red' },
+  'clarifying questions':   { icon: '❓', cls: 'section-purple' },
+  'questions':              { icon: '❓', cls: 'section-purple' },
+  'suggestions':            { icon: '💡', cls: 'section-green' },
+  'recommendations':        { icon: '💡', cls: 'section-green' },
+  'milestones':             { icon: '🗺',  cls: 'section-green' },
+  'implementation plan':    { icon: '🗺',  cls: 'section-green' },
+  'plan':                   { icon: '🗺',  cls: 'section-green' },
+  'next steps':             { icon: '▶️',  cls: 'section-green' },
+};
+
+function getSectionStyle(headingText) {
+  const lower = headingText.toLowerCase().trim();
+  for (const [key, val] of Object.entries(SECTION_STYLES)) {
+    if (lower.includes(key)) return val;
   }
+  return null;
+}
+
+/**
+ * Render accumulated agent text as styled markdown.
+ * streaming=true: update in-place without removing the current bubble element id.
+ */
+function renderBubbleMarkdown(bubble, streaming = false) {
+  if (!bubble._rawText) return;
+  try {
+    // Use marked with a custom renderer for headings
+    const renderer = new marked.Renderer();
+    renderer.heading = function({ text, depth }) {
+      const style = getSectionStyle(text);
+      const tag = `h${Math.min(depth, 4)}`;
+      if (style) {
+        return `<${tag} class="section-heading ${style.cls}">${style.icon} ${text}</${tag}>`;
+      }
+      return `<${tag}>${text}</${tag}>`;
+    };
+    // Code blocks with copy button
+    renderer.code = function({ text, lang }) {
+      const langLabel = lang ? `<span class="code-lang">${lang}</span>` : '';
+      const escaped = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      return `<div class="code-block">` +
+        `<div class="code-block-header">${langLabel}<button class="code-copy-btn" onclick="copyCode(this)">Copy</button></div>` +
+        `<pre><code>${escaped}</code></pre>` +
+        `</div>`;
+    };
+
+    const html = marked.parse(bubble._rawText, { breaks: true, gfm: true, renderer });
+    const existing = bubble.querySelector('.bubble-markdown');
+    if (existing) {
+      existing.innerHTML = html;
+    } else {
+      const div = document.createElement('div');
+      div.className = 'bubble-markdown';
+      div.innerHTML = html;
+      const streamEl = bubble.querySelector('.bubble-streaming');
+      if (streamEl) streamEl.replaceWith(div);
+      else bubble.appendChild(div);
+    }
+  } catch (_) {
+    // fallback: just show raw text
+    const el = bubble.querySelector('.bubble-streaming') || bubble.querySelector('.bubble-markdown');
+    if (el) el.textContent = bubble._rawText;
+  }
+}
+
+function copyCode(btn) {
+  const code = btn.closest('.code-block').querySelector('code').textContent;
+  navigator.clipboard.writeText(code).then(() => {
+    btn.textContent = 'Copied!';
+    setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
+  }).catch(() => {});
 }
 
 function scrollChatToBottom() {

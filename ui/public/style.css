@@ -438,11 +438,26 @@ select.input-field { cursor: pointer; appearance: none; background-image: url("d
   word-break: break-word;
 }
 
+/* ── Bubble header (avatar + label + timestamp) ─────────────────────────────── */
+.bubble-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255,255,255,.06);
+}
+.bubble-avatar { font-size: 14px; line-height: 1; }
+.bubble-label  { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .5px; }
+.bubble-ts     { font-size: 10.5px; color: var(--text-dim); margin-left: auto; }
+
 .chat-bubble-agent {
   align-self: flex-start;
   background: var(--surface2);
   border: 1px solid var(--border);
   color: var(--text);
+  width: 92%;
+  max-width: 92%;
 }
 
 .chat-bubble-user {
@@ -450,7 +465,11 @@ select.input-field { cursor: pointer; appearance: none; background-image: url("d
   background: var(--blue-dim);
   border: 1px solid rgba(56,139,253,.4);
   color: #fff;
+  max-width: 75%;
 }
+.chat-bubble-user .bubble-header { border-bottom-color: rgba(255,255,255,.12); }
+.chat-bubble-user .bubble-label  { color: rgba(255,255,255,.7); }
+.chat-bubble-user .bubble-ts     { color: rgba(255,255,255,.45); }
 
 .chat-bubble-system {
   align-self: center;
@@ -470,8 +489,21 @@ select.input-field { cursor: pointer; appearance: none; background-image: url("d
   white-space: pre-wrap;
   margin: 0;
 }
+.bubble-streaming {
+  opacity: .85;
+  white-space: pre-wrap;
+  font-size: 13px;
+  min-height: 18px;
+}
+.bubble-streaming::after {
+  content: '▋';
+  animation: blink .9s step-end infinite;
+  color: var(--blue);
+  margin-left: 2px;
+}
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
 
-/* Markdown-rendered agent bubble — replaces <pre> after message completes */
+/* Markdown-rendered agent bubble — replaces streaming div after message completes */
 .bubble-markdown {
   font-size: 13px;
   line-height: 1.6;
@@ -479,30 +511,17 @@ select.input-field { cursor: pointer; appearance: none; background-image: url("d
 .bubble-markdown p  { margin: 0 0 8px; }
 .bubble-markdown p:last-child { margin-bottom: 0; }
 .bubble-markdown h1, .bubble-markdown h2, .bubble-markdown h3,
-.bubble-markdown h4 { margin: 12px 0 6px; font-weight: 600; }
-.bubble-markdown h1 { font-size: 1.2em; }
-.bubble-markdown h2 { font-size: 1.1em; }
+.bubble-markdown h4 { margin: 14px 0 6px; font-weight: 600; }
+.bubble-markdown h1 { font-size: 1.15em; }
+.bubble-markdown h2 { font-size: 1.05em; }
 .bubble-markdown h3, .bubble-markdown h4 { font-size: 1em; }
 .bubble-markdown ul, .bubble-markdown ol { margin: 4px 0 8px 20px; padding: 0; }
-.bubble-markdown li { margin: 2px 0; }
+.bubble-markdown li { margin: 3px 0; }
 .bubble-markdown code {
   background: rgba(255,255,255,.08);
   border-radius: 3px;
   padding: 1px 5px;
-  font-family: 'Cascadia Code', 'Consolas', monospace;
-  font-size: 12px;
-}
-.bubble-markdown pre {
-  background: rgba(0,0,0,.35);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 10px 12px;
-  overflow-x: auto;
-  margin: 6px 0;
-}
-.bubble-markdown pre code {
-  background: none;
-  padding: 0;
+  font-family: var(--mono);
   font-size: 12px;
 }
 .bubble-markdown blockquote {
@@ -513,9 +532,70 @@ select.input-field { cursor: pointer; appearance: none; background-image: url("d
 }
 .bubble-markdown strong { font-weight: 600; }
 .bubble-markdown em { font-style: italic; }
-.bubble-markdown hr { border: none; border-top: 1px solid var(--border); margin: 10px 0; }
+.bubble-markdown hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
 .bubble-markdown a { color: var(--blue); text-decoration: none; }
 .bubble-markdown a:hover { text-decoration: underline; }
+
+/* ── Colored section headings ────────────────────────────────────────────────── */
+.section-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  margin: 14px 0 8px !important;
+  font-size: .95em !important;
+}
+.section-blue   { background: rgba(56,139,253,.12); border-left: 3px solid var(--blue);   color: #79b8ff; }
+.section-yellow { background: rgba(210,153,34,.12);  border-left: 3px solid var(--yellow); color: #e3b341; }
+.section-red    { background: rgba(248,81,73,.1);    border-left: 3px solid var(--red);    color: #ff7b72; }
+.section-purple { background: rgba(163,113,247,.12); border-left: 3px solid var(--purple); color: #c9a9ff; }
+.section-green  { background: rgba(63,185,80,.1);    border-left: 3px solid var(--green);  color: #7ee787; }
+
+/* ── Code block with copy button ────────────────────────────────────────────── */
+.code-block {
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(0,0,0,.3);
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.code-lang {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--mono);
+  text-transform: lowercase;
+}
+.code-copy-btn {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 3px;
+  border: 1px solid var(--border2);
+  background: var(--surface);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.code-copy-btn:hover { background: var(--blue-dim); color: #fff; border-color: var(--blue-dim); }
+.code-block pre {
+  background: rgba(0,0,0,.25);
+  padding: 10px 12px;
+  overflow-x: auto;
+  margin: 0;
+}
+.code-block pre code {
+  background: none;
+  padding: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+}
 
 /* Typing indicator */
 .chat-typing {
