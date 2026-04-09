@@ -241,8 +241,7 @@ function connectWS() {
       }
 
       case 'progress_done':
-        // Keep panel visible briefly then hide as logs stream in
-        setTimeout(() => showLaunchProgress(false), 800);
+        showLaunchProgress(false);
         break;
 
       case 'progress_error':
@@ -276,6 +275,8 @@ function enterState(newState) {
   const inPlanMode = (newState === 'planning');
   $('terminal').classList.toggle('hidden', inPlanMode);
   $('chatPanel').classList.toggle('hidden', !inPlanMode);
+  // Always clear any lingering progress overlay when switching state
+  showLaunchProgress(false);
 
   if (newState === 'planning') {
     modeTag.textContent = '🗺 Planning';
