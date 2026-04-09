@@ -179,7 +179,12 @@ async function streamCopilot(messages, config, onChunk, onDone, onError) {
   const token = config.ghToken;
   if (!token) { onError(new Error('GH_TOKEN not configured')); return; }
 
-  const model = config.model || 'gpt-4o';
+  // Normalize: strip Azure ML registry URI → short model name
+  // "azureml://registries/azure-openai/models/gpt-4o/versions/2" → "gpt-4o"
+  const rawModel = config.model || 'gpt-4o';
+  const uriMatch = rawModel.match(/\/models\/([^/]+)/);
+  const model = uriMatch ? uriMatch[1] : rawModel;
+
   // o1 models don't support streaming or system messages
   const isO1 = model.startsWith('o1');
   const msgsToSend = isO1 ? messages.filter(m => m.role !== 'system') : messages;
