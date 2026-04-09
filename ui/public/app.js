@@ -1269,7 +1269,7 @@ function initPlanStepper() {
     const el = document.createElement('div');
     el.className = 'ps-step ps-pending';
     el.id = `ps-${step.id}`;
-    el.title = step.label;
+    el.dataset.label = step.label;
     el.innerHTML = `<span class="ps-icon"></span>`;
     track.appendChild(el);
   });

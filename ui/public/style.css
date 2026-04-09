@@ -483,15 +483,12 @@ select.input-field { cursor: pointer; appearance: none; background-image: url("d
   top: 12px;
   right: 12px;
   width: 20px;
-  /* height is auto — sized to fit 5 nodes + line */
   display: flex;
   flex-direction: column;
   align-items: center;
   pointer-events: none;
   z-index: 10;
-  /* subtle frosted card */
-  background: rgba(13,17,23,.7);
-  border: 1px solid var(--border2);
+  background: rgba(13,17,23,.6);
   border-radius: 12px;
   padding: 8px 0;
   backdrop-filter: blur(6px);
@@ -542,19 +539,38 @@ select.input-field { cursor: pointer; appearance: none; background-image: url("d
 }
 .ps-label { display: none; }
 
-/* Tooltip — label floats left of the node */
-.ps-step[title]:hover::before {
-  content: attr(title);
+/* Active step label — always visible, floats left of the dot */
+.ps-step.ps-active::before {
+  content: attr(data-label);
   position: absolute;
   right: calc(100% + 8px);
   top: 50%;
   transform: translateY(-50%);
-  background: rgba(13,17,23,.92);
-  border: 1px solid var(--border2);
-  color: var(--text);
-  font-size: 10.5px;
+  background: rgba(13,17,23,.85);
+  color: var(--purple);
+  font-size: 10px;
+  font-weight: 600;
   white-space: nowrap;
-  padding: 3px 8px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  pointer-events: none;
+  z-index: 30;
+  letter-spacing: .3px;
+}
+
+/* Other steps show label only on hover */
+.ps-step:not(.ps-active)[data-label]:hover::before {
+  content: attr(data-label);
+  position: absolute;
+  right: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(13,17,23,.88);
+  border: 1px solid var(--border2);
+  color: var(--text-muted);
+  font-size: 10px;
+  white-space: nowrap;
+  padding: 2px 7px;
   border-radius: 4px;
   pointer-events: none;
   z-index: 30;
