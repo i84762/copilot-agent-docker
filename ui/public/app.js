@@ -180,7 +180,7 @@ function connectWS() {
       }
 
       case 'quota_update': {
-        updateQuotaBadge(msg.remaining, msg.limit, msg.provider);
+        updateQuotaBadge(msg.remaining, msg.limit, msg.provider, msg.reset);
         break;
       }
 
@@ -1305,7 +1305,7 @@ function hidePlanStepper() {
   if (stepper) stepper.classList.add('hidden');
 }
 
-function updateQuotaBadge(remaining, limit, provider) {
+function updateQuotaBadge(remaining, limit, provider, reset) {
   const badge = $('quotaBadge');
   if (!badge) return;
   if (remaining === null || remaining === undefined) {
@@ -1322,7 +1322,14 @@ function updateQuotaBadge(remaining, limit, provider) {
   const pctStr = (pct * 100).toFixed(1) + '%';
   const countStr = lim > 0 ? `${rem.toLocaleString()}/${lim.toLocaleString()}` : `${rem.toLocaleString()}`;
   badge.textContent = `${pctStr} left`;
-  badge.title = `${provider || 'API'}: ${countStr} requests remaining in current window`;
+  let tip = `${provider || 'API'}: ${countStr} requests remaining`;
+  if (reset) {
+    try {
+      const resetDate = new Date(isNaN(Number(reset)) ? reset : Number(reset) * 1000);
+      tip += ` · resets ${resetDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    } catch (_) {}
+  }
+  badge.title = tip;
 }
 
 

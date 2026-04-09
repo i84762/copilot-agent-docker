@@ -205,11 +205,19 @@ async function streamCopilot(messages, config, onChunk, onDone, onError) {
     return;
   }
 
+  // Log all rate-limit headers for debugging
+  const rlHeaders = {};
+  for (const [k, v] of res.headers.entries()) {
+    if (k.includes('ratelimit') || k.includes('quota') || k.includes('x-ms')) rlHeaders[k] = v;
+  }
+  console.log('[quota] GitHub Models headers:', JSON.stringify(rlHeaders));
+
   // Extract quota from response headers (GitHub Models returns these)
   const quota = {
     provider:  'GitHub Models',
     remaining: res.headers.get('x-ratelimit-remaining-requests') || res.headers.get('x-ms-quota-remaining-requests'),
     limit:     res.headers.get('x-ratelimit-limit-requests')     || res.headers.get('x-ms-quota-limit-requests'),
+    reset:     res.headers.get('x-ratelimit-reset'),
   };
 
   await consumeSSE(res, onChunk, (q) => onDone(q), onError, quota);
@@ -254,10 +262,17 @@ async function streamClaude(messages, config, onChunk, onDone, onError) {
     return;
   }
 
+  const rlHeaders = {};
+  for (const [k, v] of res.headers.entries()) {
+    if (k.includes('ratelimit') || k.includes('quota')) rlHeaders[k] = v;
+  }
+  console.log('[quota] Anthropic headers:', JSON.stringify(rlHeaders));
+
   const quota = {
     provider:  'Anthropic',
     remaining: res.headers.get('anthropic-ratelimit-requests-remaining'),
     limit:     res.headers.get('anthropic-ratelimit-requests-limit'),
+    reset:     res.headers.get('anthropic-ratelimit-requests-reset'),
   };
 
   await consumeSSEAnthropic(res, onChunk, (q) => onDone(q), onError, quota);
