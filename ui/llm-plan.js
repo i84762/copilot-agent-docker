@@ -21,7 +21,7 @@ const path = require('path');
 const sessions = new Map();   // sessionId → { agent, config, messages: [] }
 
 function createSession(sessionId, agent, config) {
-  sessions.set(sessionId, { agent, config, messages: [] });
+  sessions.set(sessionId, { agent, config, messages: [], currentStep: 'requirements', completedSteps: [] });
 }
 
 function getSession(sessionId) {
@@ -87,6 +87,16 @@ function readProjectContext(projectPath, maxTotalChars = 40000) {
   return parts.join('\n\n');
 }
 
+// ── Planning steps definition ────────────────────────────────────────────────
+
+const PLANNING_STEPS = [
+  { id: 'requirements',  label: 'Requirements',    icon: '📋' },
+  { id: 'codebase',      label: 'Codebase Review', icon: '🔍' },
+  { id: 'gaps',          label: 'Gaps & Unknowns', icon: '❓' },
+  { id: 'approach',      label: 'Technical Approach', icon: '🏗️' },
+  { id: 'plan',          label: 'Final Plan',       icon: '✅' },
+];
+
 // ── System prompt ────────────────────────────────────────────────────────────
 
 function buildSystemPrompt(config, projectContext) {
@@ -94,38 +104,69 @@ function buildSystemPrompt(config, projectContext) {
   const name = config.sessionName || 'this project';
 
   return `You are Archon, an expert AI software engineer and technical architect.
-You are engaged in an intensive PLANNING SESSION for: "${name}".
+You are engaged in a PLANNING SESSION for: "${name}".
 
 ## IMPORTANT — You are a text-only planning assistant
 You do NOT have shell access, tool calls, or the ability to run commands.
-All project context you need is embedded below in "Project Files".
-Read it carefully and reason from it directly. Do not ask to run anything.
+All project context is embedded below in "Project Files". Reason from it directly.
 
-## Your Role
-Conduct a thorough, professional planning session before any code is written:
-1. ANALYZE the task and existing codebase using the files provided below
-2. ASK targeted clarifying questions about anything unclear or ambiguous
-3. IDENTIFY technical risks, edge cases, and dependencies
-4. PROPOSE a detailed implementation plan with concrete milestones
-5. VALIDATE the plan with the user before declaring it ready
+## Structured 5-Step Planning Process
+You MUST follow this process exactly — one step at a time, in order:
+
+STEP 1 — requirements  : Requirements Clarification
+STEP 2 — codebase      : Codebase Review & Context
+STEP 3 — gaps          : Gaps & Unknowns
+STEP 4 — approach      : Technical Approach
+STEP 5 — plan          : Final Plan
+
+### Rules
+- Cover ONLY the current step. Do not jump ahead.
+- At the START of every response, on its own line, output the step tag:
+  <STEP:requirements>  or  <STEP:codebase>  etc.
+- At the END of a step (when you believe you have enough info to move forward),
+  output on its own line: <STEP_DONE:step_id>
+  Then ask the user: "Shall I move to [next step name], or is there anything to revisit?"
+- You MAY go back to a previous step if the user requests it or if new info changes things.
+  When going back, emit the tag for that step.
+- On STEP 5 only, after presenting the plan, wrap it in:
+  <PLAN_START>
+  ...full detailed plan...
+  <PLAN_END>
+
+### What each step covers
+STEP 1 — requirements:
+  - Restate the task in your own words
+  - List what you understand as required features/outcomes
+  - Ask targeted clarifying questions (numbered list) — ONLY things that affect architecture
+  - Do NOT analyze code yet
+
+STEP 2 — codebase:
+  - Review the provided project files
+  - Summarize the existing architecture, patterns, and tech stack
+  - Identify relevant existing code that the task will interact with
+  - No questions needed unless critical — summarize what you found
+
+STEP 3 — gaps:
+  - List specific gaps, unknowns, or conflicts between requirements and codebase
+  - Ask the user to resolve any blockers before proceeding
+  - Keep this focused — only real blockers, not hypotheticals
+
+STEP 4 — approach:
+  - Propose the technical approach: architecture decisions, libraries, patterns
+  - Break work into ordered milestones with acceptance criteria
+  - Call out risks and mitigations
+  - Ask for approval or changes before finalizing
+
+STEP 5 — plan:
+  - Write the complete, detailed implementation plan
+  - Include: file-by-file changes, milestone sequence, test strategy
+  - Output the plan inside <PLAN_START>...<PLAN_END> tags when finalized
 
 ## Task / Requirements
 ${task}
 
-## Project Files (read from disk — your entire codebase context)
-${projectContext || '(No project files found — this may be a new project)'}
-
-## Instructions
-- Ask questions proactively. Do not assume. Surface all ambiguities.
-- Explain WHY you chose each architectural approach.
-- List risks and how you will mitigate them.
-- Break work into small, testable milestones.
-- Respond in clear markdown. Be thorough but structured.
-- When you and the user are satisfied with the plan, output it wrapped in:
-  <PLAN_START>
-  ...full detailed plan...
-  <PLAN_END>
-- Until that tag is used, this is still an active planning discussion.`;
+## Project Files (your entire codebase context — reason from these directly)
+${projectContext || '(No project files found — this may be a new project)'}`;
 }
 
 // ── Agent API implementations ────────────────────────────────────────────────
@@ -432,16 +473,55 @@ function startPlanSession(config) {
 
 /**
  * Send a user message in a planning session.
- * Streams chunks via onChunk(text), calls onDone() when complete, onError(err) on failure.
+ * Streams chunks via onChunk(text), calls onDone(full, quota) when complete.
+ * onStep(stepId, done) is called when the agent emits <STEP:x> or <STEP_DONE:x> tags.
+ * Step tags are stripped from the visible output.
  */
-async function sendPlanMessage(sessionId, userText, onChunk, onDone, onError) {
+async function sendPlanMessage(sessionId, userText, onChunk, onDone, onError, onStep) {
   const sess = getSession(sessionId);
   if (!sess) { onError(new Error('Planning session not found')); return; }
 
   sess.messages.push({ role: 'user', content: userText });
 
   let full = '';
-  const accChunk = text => { full += text; onChunk(text); };
+  let tagBuf = '';  // accumulates partial tag text between chunks
+
+  const STEP_RE      = /<STEP:([a-z_]+)>/g;
+  const STEP_DONE_RE = /<STEP_DONE:([a-z_]+)>/g;
+
+  const accChunk = text => {
+    // Accumulate for full text
+    full += text;
+    tagBuf += text;
+
+    // Detect and fire step change tags — strip them from visible output
+    let visible = tagBuf;
+
+    // Handle <STEP:id> tags
+    let match;
+    STEP_RE.lastIndex = 0;
+    while ((match = STEP_RE.exec(tagBuf)) !== null) {
+      const stepId = match[1];
+      if (stepId !== sess.currentStep) {
+        sess.currentStep = stepId;
+        if (onStep) onStep(stepId, false);
+      }
+    }
+    // Handle <STEP_DONE:id> tags
+    STEP_DONE_RE.lastIndex = 0;
+    while ((match = STEP_DONE_RE.exec(tagBuf)) !== null) {
+      const stepId = match[1];
+      if (!sess.completedSteps.includes(stepId)) sess.completedSteps.push(stepId);
+      if (onStep) onStep(stepId, true);
+    }
+
+    // Strip all step tags from visible text
+    visible = visible.replace(/<STEP:[a-z_]+>/g, '').replace(/<STEP_DONE:[a-z_]+>/g, '');
+    tagBuf = '';
+
+    if (visible) onChunk(visible);
+  };
+
   const accDone  = (quota) => {
     sess.messages.push({ role: 'assistant', content: full });
     onDone(full, quota);
@@ -477,4 +557,4 @@ function extractFinalPlan(sessionId) {
   return match ? match[1].trim() : null;
 }
 
-module.exports = { startPlanSession, sendPlanMessage, extractFinalPlan, deleteSession, getSession };
+module.exports = { startPlanSession, sendPlanMessage, extractFinalPlan, deleteSession, getSession, PLANNING_STEPS };

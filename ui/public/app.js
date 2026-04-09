@@ -163,6 +163,11 @@ function connectWS() {
         break;
       }
 
+      case 'plan_step': {
+        updatePlanStep(msg.stepId, msg.done);
+        break;
+      }
+
       case 'chat_typing': {
         showChatTyping();
         scrollChatToBottom();
@@ -294,8 +299,9 @@ function enterState(newState) {
   const inPlanMode = (newState === 'planning');
   $('terminal').classList.toggle('hidden', inPlanMode);
   $('chatPanel').classList.toggle('hidden', !inPlanMode);
-  // Hide chat header when not in planning mode
+  // Hide chat header and stepper when not in planning mode
   if (!inPlanMode && $('chatHeader')) $('chatHeader').classList.add('hidden');
+  if (!inPlanMode) hidePlanStepper();
   // Always clear any lingering progress overlay when switching state
   showLaunchProgress(false);
 
@@ -1161,6 +1167,14 @@ const AGENT_ICONS = {
   copilot: '🤖', claude: '🟠', gemini: '🔵', aider: '🛠️'
 };
 
+const PLANNING_STEPS = [
+  { id: 'requirements', label: 'Requirements',      icon: '📋' },
+  { id: 'codebase',     label: 'Codebase Review',   icon: '🔍' },
+  { id: 'gaps',         label: 'Gaps & Unknowns',   icon: '❓' },
+  { id: 'approach',     label: 'Technical Approach', icon: '🏗️' },
+  { id: 'plan',         label: 'Final Plan',         icon: '✅' },
+];
+
 function updateChatHeader(agent, model) {
   const header = $('chatHeader');
   if (!header) return;
@@ -1170,8 +1184,50 @@ function updateChatHeader(agent, model) {
   $('chatAgentName').textContent = name;
   $('chatAgentModel').textContent = model || '';
   header.classList.remove('hidden');
-  // Reset quota badge when starting a new session
   updateQuotaBadge(null, null, null);
+  initPlanStepper();
+}
+
+// ── Planning stepper ──────────────────────────────────────────────────────────
+
+function initPlanStepper() {
+  const stepper = $('planStepper');
+  const track   = $('planStepperTrack');
+  if (!stepper || !track) return;
+  track.innerHTML = '';
+  PLANNING_STEPS.forEach(step => {
+    const el = document.createElement('div');
+    el.className = 'ps-step ps-pending';
+    el.id = `ps-${step.id}`;
+    el.innerHTML = `<span class="ps-icon">${step.icon}</span><span class="ps-label">${step.label}</span>`;
+    track.appendChild(el);
+  });
+  stepper.classList.remove('hidden');
+}
+
+function updatePlanStep(stepId, done) {
+  // Mark all steps before this one as done, set this as active or done
+  let found = false;
+  PLANNING_STEPS.forEach(step => {
+    const el = $(`ps-${step.id}`);
+    if (!el) return;
+    if (step.id === stepId) {
+      found = true;
+      el.classList.remove('ps-pending', 'ps-active', 'ps-done');
+      el.classList.add(done ? 'ps-done' : 'ps-active');
+      if (done) el.querySelector('.ps-icon').textContent = '✓';
+    } else if (!found) {
+      // steps before current → done
+      el.classList.remove('ps-pending', 'ps-active');
+      el.classList.add('ps-done');
+      el.querySelector('.ps-icon').textContent = '✓';
+    }
+  });
+}
+
+function hidePlanStepper() {
+  const stepper = $('planStepper');
+  if (stepper) stepper.classList.add('hidden');
 }
 
 function updateQuotaBadge(remaining, limit, provider) {

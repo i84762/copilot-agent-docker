@@ -608,16 +608,23 @@ wss.on('connection', ws => {
           safeSend(ws, { type: 'container_started', containerId: virtualId, mode: 'plan', agent: planAgent, model: modelLabel });
           devLog('[plan] plan_container virtual session ready — sending initial message');
 
-          // Send the first message automatically
+          // Emit initial step so stepper shows Step 1 active immediately
+          safeSend(ws, { type: 'plan_step', stepId: 'requirements', done: false });
+
+          // Kick off Step 1 — agent starts with requirements clarification only
           const initialMsg =
-            'Please analyze the task and codebase context provided in the system prompt. ' +
-            'You have the project files inline above — no need to run any commands. ' +
-            'Provide your structured analysis: project overview, requirements breakdown, ' +
-            'gaps & ambiguities, technical risks, and your clarifying questions. ' +
-            'Do NOT write code or produce a final plan yet — just the analysis and questions.';
+            'Please begin Step 1: Requirements Clarification. ' +
+            'Restate the task in your own words, list what you understand as required, ' +
+            'and ask any clarifying questions needed before proceeding. ' +
+            'Do NOT review the codebase yet — that is Step 2.';
 
           safeSend(ws, { type: 'chat_typing' });
           agentTyping = true;
+
+          const onStepChange = (stepId, done) => {
+            safeSend(ws, { type: 'plan_step', stepId, done });
+            devLog(`[plan step] ${stepId} done=${done}`);
+          };
 
           llmPlan.sendPlanMessage(
             activePlanSessionId,
@@ -627,7 +634,6 @@ wss.on('connection', ws => {
               agentTyping = false;
               safeSend(ws, { type: 'chat_message_end' });
               if (quota?.remaining != null) safeSend(ws, { type: 'quota_update', ...quota });
-              // Check if plan is already finalized
               const plan = llmPlan.extractFinalPlan(activePlanSessionId);
               if (plan) {
                 writePlanToProject(msg.config?.projectPath, plan);
@@ -639,7 +645,8 @@ wss.on('connection', ws => {
               devLog(`[plan api error] ${err.message}`);
               safeSend(ws, { type: 'chat_system', text: `⚠️ LLM API error: ${err.message}` });
               safeSend(ws, { type: 'chat_message_end' });
-            }
+            },
+            onStepChange
           );
 
           stepP('image', 'LLM API connected', 'ok');
@@ -684,7 +691,8 @@ wss.on('connection', ws => {
                 devLog(`[chat_input api error] ${err.message}`);
                 safeSend(ws, { type: 'chat_system', text: `⚠️ LLM API error: ${err.message}` });
                 safeSend(ws, { type: 'chat_message_end' });
-              }
+              },
+              (stepId, done) => { safeSend(ws, { type: 'plan_step', stepId, done }); }
             );
           } catch (err) {
             safeSend(ws, { type: 'error', message: `Chat input: ${err.message}` });
