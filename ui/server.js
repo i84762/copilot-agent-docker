@@ -383,6 +383,66 @@ app.post('/api/image/build', async (_req, res) => {
   }
 });
 
+// ── Model discovery ───────────────────────────────────────────────────────────
+// Fetch available models from each provider's API.
+// Returns { models: [{id, name}], error? }
+
+async function fetchCopilotModels(token) {
+  const res = await fetch('https://models.inference.ai.azure.com/models', {
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+  });
+  if (!res.ok) throw new Error(`GitHub Models API ${res.status}`);
+  const data = await res.json();
+  const list = (data.data || data || []);
+  return list
+    .filter(m => m.capabilities?.type === 'chat' || m.object === 'model')
+    .map(m => ({ id: m.id || m.name, name: m.name || m.id }))
+    .filter(m => m.id)
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+async function fetchClaudeModels(apiKey) {
+  const res = await fetch('https://api.anthropic.com/v1/models', {
+    headers: {
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+  });
+  if (!res.ok) throw new Error(`Anthropic API ${res.status}`);
+  const data = await res.json();
+  return (data.data || [])
+    .map(m => ({ id: m.id, name: m.display_name || m.id }))
+    .sort((a, b) => b.id.localeCompare(a.id)); // newest first
+}
+
+async function fetchGeminiModels(apiKey) {
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+  if (!res.ok) throw new Error(`Gemini API ${res.status}`);
+  const data = await res.json();
+  return (data.models || [])
+    .filter(m => m.supportedGenerationMethods?.includes('generateContent'))
+    .map(m => ({
+      id:   m.name.replace('models/', ''),
+      name: m.displayName || m.name.replace('models/', ''),
+    }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+app.get('/api/models', async (req, res) => {
+  const { agent, token } = req.query;
+  if (!agent || !token) return res.status(400).json({ error: 'agent and token required' });
+  try {
+    let models;
+    if (agent === 'copilot')     models = await fetchCopilotModels(token);
+    else if (agent === 'claude') models = await fetchClaudeModels(token);
+    else if (agent === 'gemini') models = await fetchGeminiModels(token);
+    else return res.status(400).json({ error: 'Unknown agent' });
+    res.json({ models });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ── WebSocket ─────────────────────────────────────────────────────────────────
 
 wss.on('connection', ws => {

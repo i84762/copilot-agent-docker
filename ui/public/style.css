@@ -134,6 +134,23 @@ main {
 .input-field:focus { border-color: var(--blue-dim); }
 .input-field::placeholder { color: var(--text-dim); }
 
+/* Model refresh button ↻ inline with label */
+.btn-fetch-models {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  padding: 1px 5px;
+  margin-left: 4px;
+  vertical-align: middle;
+  transition: color 0.15s, border-color 0.15s;
+}
+.btn-fetch-models:hover { color: var(--blue); border-color: var(--blue); }
+.btn-fetch-models:disabled { opacity: 0.4; cursor: default; }
+
 .textarea { resize: vertical; min-height: 54px; font-family: var(--font); }
 
 select.input-field { cursor: pointer; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%23848d97' d='M1.41 0L6 4.58 10.59 0 12 1.41 6 7.41 0 1.41z'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 8px center; padding-right: 24px; }

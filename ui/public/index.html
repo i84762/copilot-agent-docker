@@ -117,7 +117,7 @@
             Required permissions: <strong>Models</strong> (read) · <strong>Repositories</strong> (read) · <strong>User</strong> (read)<br>
             <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" class="help-link">Create fine-grained token ↗</a>
           </div>
-          <label class="field-label" style="margin-top:6px">Model</label>
+          <label class="field-label" style="margin-top:6px">Model <button type="button" class="btn-fetch-models" data-agent="copilot" title="Fetch available models">↻</button></label>
           <select id="copilotModel" class="input-field">
             <option value="gpt-4o">gpt-4o (default)</option>
             <option value="gpt-4o-mini">gpt-4o-mini (faster, cheaper)</option>
@@ -135,7 +135,7 @@
             API key from Anthropic Console.
             <a href="https://console.anthropic.com/settings/keys" target="_blank" class="help-link">Get key ↗</a>
           </p>
-          <label class="field-label">Model</label>
+          <label class="field-label">Model <button type="button" class="btn-fetch-models" data-agent="claude" title="Fetch available models">↻</button></label>
           <select id="claudeModel" class="input-field">
             <option value="claude-opus-4-5">Claude Opus (most capable)</option>
             <option value="claude-sonnet-4-5">Claude Sonnet (balanced)</option>

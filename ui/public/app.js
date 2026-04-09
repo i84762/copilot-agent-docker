@@ -646,6 +646,88 @@ document.querySelectorAll('.input-field, input[type="checkbox"]').forEach(el => 
   el.addEventListener('input',  () => { saveForm(); checkSetupHint(); });
 });
 
+// ── Model discovery ───────────────────────────────────────────────────────────
+
+const MODEL_TOKEN_FIELD = { copilot: 'ghToken', claude: 'anthropicApiKey', gemini: 'geminiApiKey' };
+const MODEL_SELECT_ID   = { copilot: 'copilotModel', claude: 'claudeModel', gemini: 'geminiModel' };
+
+async function fetchModels(agent) {
+  const tokenField = MODEL_TOKEN_FIELD[agent];
+  const selectId   = MODEL_SELECT_ID[agent];
+  if (!tokenField || !selectId) return;
+
+  const token = $(tokenField)?.value.trim();
+  if (!token) return;
+
+  const select = $(selectId);
+  if (!select) return;
+  const prevValue = select.value;
+
+  select.disabled = true;
+  const loadingOpt = document.createElement('option');
+  loadingOpt.value = '';
+  loadingOpt.textContent = 'Fetching models…';
+  select.insertBefore(loadingOpt, select.firstChild);
+  select.value = '';
+
+  try {
+    const res  = await fetch(`/api/models?agent=${encodeURIComponent(agent)}&token=${encodeURIComponent(token)}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+
+    // Rebuild the <select> with live models
+    select.innerHTML = '';
+    data.models.forEach(m => {
+      const opt = document.createElement('option');
+      opt.value       = m.id;
+      opt.textContent = m.name !== m.id ? `${m.id} — ${m.name}` : m.id;
+      select.appendChild(opt);
+    });
+
+    // Restore previous selection if still present
+    if (prevValue && [...select.options].some(o => o.value === prevValue)) {
+      select.value = prevValue;
+    }
+    saveForm();
+  } catch (e) {
+    // On error, remove the loading option and show a brief error
+    loadingOpt.remove();
+    select.disabled = false;
+    console.warn('[models] fetch failed:', e.message);
+    // Show error inline using first option's text temporarily
+    const errOpt = document.createElement('option');
+    errOpt.value = prevValue;
+    errOpt.textContent = `⚠️ ${e.message.slice(0, 60)}`;
+    select.insertBefore(errOpt, select.firstChild);
+    select.value = prevValue;
+    setTimeout(() => { errOpt.remove(); if (!select.value) select.value = prevValue; }, 4000);
+    return;
+  }
+  select.disabled = false;
+}
+
+// Refresh models when token field loses focus (and has a value)
+Object.entries(MODEL_TOKEN_FIELD).forEach(([agent, fieldId]) => {
+  const el = $(fieldId);
+  if (!el) return;
+  el.addEventListener('blur', () => {
+    if (el.value.trim()) fetchModels(agent);
+  });
+});
+
+// Refresh button (↻) next to each model label
+document.querySelectorAll('.btn-fetch-models').forEach(btn => {
+  btn.addEventListener('click', () => fetchModels(btn.dataset.agent));
+});
+
+// Auto-fetch after loadForm if token is already saved
+async function fetchAllSavedModels() {
+  for (const agent of ['copilot', 'claude', 'gemini']) {
+    const tok = $(MODEL_TOKEN_FIELD[agent])?.value.trim();
+    if (tok) await fetchModels(agent);
+  }
+}
+
 // ── Container list ────────────────────────────────────────────────────────────
 
 function listContainers() {
@@ -1704,6 +1786,7 @@ if (isElectron) {
   updateButtons();
   updateTerminalTitle();
   connectWS();
+  fetchAllSavedModels();                     // populate model dropdowns from live APIs
 
   // Periodic container list refresh
   setInterval(listContainers, 10000);
