@@ -452,23 +452,101 @@ async function consumeSSEGemini(res, onChunk, onDone, onError) {
   }
 }
 
-// ── Public API ───────────────────────────────────────────────────────────────
+// ── Session persistence ───────────────────────────────────────────────────────
+
+const SESSION_DIR  = '.archon';
+const SESSION_FILE = 'planning-session.json';
+const SECRET_KEYS  = new Set(['ghToken', 'anthropicApiKey', 'geminiApiKey', 'openaiApiKey']);
+
+function getSessionFilePath(projectPath) {
+  return path.join(projectPath, SESSION_DIR, SESSION_FILE);
+}
+
+function savePlanSession(sessionId) {
+  const sess = getSession(sessionId);
+  if (!sess || !sess.config?.projectPath) return;
+  try {
+    const filePath = getSessionFilePath(sess.config.projectPath);
+    const dir = path.dirname(filePath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    // Strip secrets from saved config
+    const safeConfig = Object.fromEntries(
+      Object.entries(sess.config).filter(([k]) => !SECRET_KEYS.has(k))
+    );
+    const data = {
+      savedAt:        new Date().toISOString(),
+      agent:          sess.agent,
+      config:         safeConfig,
+      messages:       sess.messages,
+      currentStep:    sess.currentStep,
+      completedSteps: sess.completedSteps,
+    };
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
+  } catch (e) { /* non-fatal */ }
+}
+
+function loadSavedSession(projectPath) {
+  const filePath = getSessionFilePath(projectPath);
+  if (!fs.existsSync(filePath)) return null;
+  try { return JSON.parse(fs.readFileSync(filePath, 'utf8')); }
+  catch { return null; }
+}
+
+function deleteSavedSession(projectPath) {
+  const filePath = getSessionFilePath(projectPath);
+  if (fs.existsSync(filePath)) { try { fs.unlinkSync(filePath); } catch { /* ok */ } }
+}
+
+function getSavedSessionMeta(projectPath) {
+  const saved = loadSavedSession(projectPath);
+  if (!saved) return null;
+  const stepDef = PLANNING_STEPS.find(s => s.id === saved.currentStep);
+  const msgCount = (saved.messages || []).filter(m => m.role !== 'system').length;
+  return {
+    savedAt:      saved.savedAt,
+    agent:        saved.agent,
+    currentStep:  saved.currentStep,
+    stepLabel:    stepDef ? stepDef.label : saved.currentStep,
+    completedSteps: saved.completedSteps || [],
+    messageCount: msgCount,
+    taskPreview:  (saved.config?.task || '').slice(0, 80),
+  };
+}
+
+
 
 /**
- * Start a new planning session. Reads project context and builds system prompt.
- * Returns sessionId.
+ * Start a planning session. If resume=true and a saved session exists for
+ * config.projectPath, restores messages/step from disk (fresh tokens from config).
+ * Returns { sessionId, resumed, currentStep, completedSteps }.
  */
-function startPlanSession(config) {
+function startPlanSession(config, resume = false) {
   const sessionId = `plan-${Date.now()}`;
   const agent     = (config.agent || 'copilot').toLowerCase();
-  const projectCtx = readProjectContext(config.projectPath);
-  const systemPrompt = buildSystemPrompt(config, projectCtx);
 
+  if (resume && config.projectPath) {
+    const saved = loadSavedSession(config.projectPath);
+    if (saved && saved.messages?.length) {
+      createSession(sessionId, agent, config);
+      const sess = getSession(sessionId);
+      // Restore conversation; keep current config (with fresh tokens)
+      sess.messages       = saved.messages;
+      sess.currentStep    = saved.currentStep    || 'requirements';
+      sess.completedSteps = saved.completedSteps || [];
+      return { sessionId, resumed: true, currentStep: sess.currentStep, completedSteps: sess.completedSteps };
+    }
+  }
+
+  // Fresh start — delete any stale saved session
+  if (config.projectPath) deleteSavedSession(config.projectPath);
+
+  const projectCtx   = readProjectContext(config.projectPath);
+  const systemPrompt = buildSystemPrompt(config, projectCtx);
   createSession(sessionId, agent, config);
   const sess = getSession(sessionId);
   sess.messages.push({ role: 'system', content: systemPrompt });
 
-  return sessionId;
+  return { sessionId, resumed: false, currentStep: 'requirements', completedSteps: [] };
 }
 
 /**
@@ -524,6 +602,7 @@ async function sendPlanMessage(sessionId, userText, onChunk, onDone, onError, on
 
   const accDone  = (quota) => {
     sess.messages.push({ role: 'assistant', content: full });
+    savePlanSession(sessionId);   // persist after every agent reply
     onDone(full, quota);
   };
 
@@ -557,4 +636,4 @@ function extractFinalPlan(sessionId) {
   return match ? match[1].trim() : null;
 }
 
-module.exports = { startPlanSession, sendPlanMessage, extractFinalPlan, deleteSession, getSession, PLANNING_STEPS };
+module.exports = { startPlanSession, sendPlanMessage, extractFinalPlan, deleteSession, getSession, getSavedSessionMeta, deleteSavedSession, PLANNING_STEPS };

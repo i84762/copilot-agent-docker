@@ -557,6 +557,13 @@ wss.on('connection', ws => {
         break;
       }
 
+      // ── Check for saved planning session in project folder ───────────────
+      case 'check_plan_session': {
+        const meta = msg.projectPath ? llmPlan.getSavedSessionMeta(msg.projectPath) : null;
+        safeSend(ws, { type: 'plan_session_info', exists: !!meta, meta });
+        break;
+      }
+
       // ── Start API-based planning session (no Docker TUI needed) ─────────
       case 'plan_container': {
         cleanup();
@@ -585,11 +592,11 @@ wss.on('connection', ws => {
           }
 
           stepP('docker', 'Reading project files', 'active');
-          // Planning uses direct LLM API — no Docker container needed for the chat phase.
-          // The container is only started when the user clicks "Execute Plan".
-          activePlanSessionId = llmPlan.startPlanSession(msg.config);
-          devLog(`[plan] API session started: ${activePlanSessionId} agent=${planAgent}`);
-          stepP('docker', 'Project context loaded', 'ok');
+          const resume = !!msg.resume;
+          const planResult = llmPlan.startPlanSession(msg.config, resume);
+          activePlanSessionId = planResult.sessionId;
+          devLog(`[plan] session=${activePlanSessionId} agent=${planAgent} resumed=${planResult.resumed}`);
+          stepP('docker', planResult.resumed ? 'Session restored' : 'Project context loaded', 'ok');
 
           stepP('image',  'Connecting to LLM API', 'active');
           stepP('create', 'Ready', 'ok');
@@ -597,57 +604,71 @@ wss.on('connection', ws => {
           stepP('attach', 'Chat session open', 'ok');
 
           safeSend(ws, { type: 'progress_done' });
-          // Use a virtual container ID so the client state machine works normally
-          const virtualId = `plan-api-${Date.now()}`;
+          const virtualId  = `plan-api-${Date.now()}`;
           activeId = virtualId;
-          // Determine model label for UI
           const modelLabel = planAgent === 'copilot' ? 'gpt-4o (GitHub Models)'
-            : planAgent === 'claude' ? 'Claude Opus' 
+            : planAgent === 'claude' ? 'Claude Opus'
             : planAgent === 'gemini' ? 'Gemini 2.0 Flash'
             : planAgent === 'aider'  ? 'Aider (Claude/Copilot)' : '';
           safeSend(ws, { type: 'container_started', containerId: virtualId, mode: 'plan', agent: planAgent, model: modelLabel });
-          devLog('[plan] plan_container virtual session ready — sending initial message');
-
-          // Emit initial step so stepper shows Step 1 active immediately
-          safeSend(ws, { type: 'plan_step', stepId: 'requirements', done: false });
-
-          // Kick off Step 1 — agent starts with requirements clarification only
-          const initialMsg =
-            'Please begin Step 1: Requirements Clarification. ' +
-            'Restate the task in your own words, list what you understand as required, ' +
-            'and ask any clarifying questions needed before proceeding. ' +
-            'Do NOT review the codebase yet — that is Step 2.';
-
-          safeSend(ws, { type: 'chat_typing' });
-          agentTyping = true;
 
           const onStepChange = (stepId, done) => {
             safeSend(ws, { type: 'plan_step', stepId, done });
             devLog(`[plan step] ${stepId} done=${done}`);
           };
 
-          llmPlan.sendPlanMessage(
-            activePlanSessionId,
-            initialMsg,
-            (chunk) => { safeSend(ws, { type: 'chat_chunk', text: chunk }); },
-            (_full, quota) => {
-              agentTyping = false;
-              safeSend(ws, { type: 'chat_message_end' });
-              if (quota?.remaining != null) safeSend(ws, { type: 'quota_update', ...quota });
-              const plan = llmPlan.extractFinalPlan(activePlanSessionId);
-              if (plan) {
-                writePlanToProject(msg.config?.projectPath, plan);
-                safeSend(ws, { type: 'plan_complete' });
-              }
-            },
-            (err) => {
-              agentTyping = false;
-              devLog(`[plan api error] ${err.message}`);
-              safeSend(ws, { type: 'chat_system', text: `⚠️ LLM API error: ${err.message}` });
-              safeSend(ws, { type: 'chat_message_end' });
-            },
-            onStepChange
-          );
+          if (planResult.resumed) {
+            // Restore stepper state from saved session
+            planResult.completedSteps.forEach(sid => onStepChange(sid, true));
+            onStepChange(planResult.currentStep, false);
+            // Tell the agent to continue from where it left off
+            const stepDef = llmPlan.PLANNING_STEPS.find(s => s.id === planResult.currentStep);
+            const resumeMsg = `We are resuming our planning session. We were on Step: ${stepDef?.label || planResult.currentStep}. Please briefly summarize where we left off and continue from that point.`;
+            safeSend(ws, { type: 'chat_system', text: `📂 Planning session restored — resuming from **${stepDef?.label || planResult.currentStep}**` });
+            safeSend(ws, { type: 'chat_typing' });
+            agentTyping = true;
+            llmPlan.sendPlanMessage(activePlanSessionId, resumeMsg,
+              (chunk) => { safeSend(ws, { type: 'chat_chunk', text: chunk }); },
+              (_full, quota) => {
+                agentTyping = false;
+                safeSend(ws, { type: 'chat_message_end' });
+                if (quota?.remaining != null) safeSend(ws, { type: 'quota_update', ...quota });
+              },
+              (err) => {
+                agentTyping = false;
+                safeSend(ws, { type: 'chat_system', text: `⚠️ LLM API error: ${err.message}` });
+                safeSend(ws, { type: 'chat_message_end' });
+              },
+              onStepChange
+            );
+          } else {
+            // Fresh session — kick off Step 1
+            safeSend(ws, { type: 'plan_step', stepId: 'requirements', done: false });
+            const initialMsg =
+              'Please begin Step 1: Requirements Clarification. ' +
+              'Restate the task in your own words, list what you understand as required, ' +
+              'and ask any clarifying questions needed before proceeding. ' +
+              'Do NOT review the codebase yet — that is Step 2.';
+            safeSend(ws, { type: 'chat_typing' });
+            agentTyping = true;
+            llmPlan.sendPlanMessage(activePlanSessionId, initialMsg,
+              (chunk) => { safeSend(ws, { type: 'chat_chunk', text: chunk }); },
+              (_full, quota) => {
+                agentTyping = false;
+                safeSend(ws, { type: 'chat_message_end' });
+                if (quota?.remaining != null) safeSend(ws, { type: 'quota_update', ...quota });
+                const plan = llmPlan.extractFinalPlan(activePlanSessionId);
+                if (plan) { writePlanToProject(msg.config?.projectPath, plan); safeSend(ws, { type: 'plan_complete' }); }
+              },
+              (err) => {
+                agentTyping = false;
+                devLog(`[plan api error] ${err.message}`);
+                safeSend(ws, { type: 'chat_system', text: `⚠️ LLM API error: ${err.message}` });
+                safeSend(ws, { type: 'chat_message_end' });
+              },
+              onStepChange
+            );
+          }
 
           stepP('image', 'LLM API connected', 'ok');
 

@@ -60,11 +60,12 @@ term.onData(data => {
 let state = 'idle'; // idle | planning | running | plan_done | error
 let ws    = null;
 let activeContainerId = null;
-let containerStartedAt = 0;  // timestamp when container_started was received
-let lastConfig        = null;       // config used for last run (for Execute Plan)
-let logBuffer         = '';         // raw log accumulation for download
+let containerStartedAt = 0;
+let lastConfig        = null;
+let pendingPlanConfig = null;  // held while waiting for plan_session_info check
+let logBuffer         = '';
 let containerRefreshTimer = null;
-let streamRenderTimer = null;       // debounce for incremental markdown render during streaming
+let streamRenderTimer = null;
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
 
@@ -165,6 +166,18 @@ function connectWS() {
 
       case 'plan_step': {
         updatePlanStep(msg.stepId, msg.done);
+        break;
+      }
+
+      case 'plan_session_info': {
+        const cfg = pendingPlanConfig;
+        pendingPlanConfig = null;
+        if (!cfg) break;
+        if (msg.exists && msg.meta) {
+          showResumePrompt(msg.meta, cfg);
+        } else {
+          launchPlan(cfg, false);
+        }
         break;
       }
 
@@ -699,9 +712,13 @@ $('planBtn').addEventListener('click', () => {
   const cfg = validateConfig();
   if (!cfg) return;
   lastConfig = cfg;
-  clearTerminal();
-  term.writeln('\x1b[35m[plan mode] Starting interactive planning session…\x1b[0m\r\n');
-  wsSend({ type: 'plan_container', config: cfg });
+  // Check if a saved planning session exists for this project folder
+  if (cfg.projectPath) {
+    wsSend({ type: 'check_plan_session', projectPath: cfg.projectPath });
+    pendingPlanConfig = cfg;  // held until plan_session_info response
+  } else {
+    launchPlan(cfg, false);
+  }
 });
 
 $('startBtn').addEventListener('click', () => {
@@ -1161,7 +1178,41 @@ function setProgressTitle(text, state) {
   el.textContent = text;
 }
 
-// ── Chat header & quota ───────────────────────────────────────────────────────
+// ── Plan launch helpers ───────────────────────────────────────────────────────
+
+function launchPlan(cfg, resume) {
+  clearTerminal();
+  term.writeln('\x1b[35m[plan mode] Starting interactive planning session…\x1b[0m\r\n');
+  wsSend({ type: 'plan_container', config: cfg, resume });
+}
+
+function showResumePrompt(meta, cfg) {
+  const prompt = $('resumePlanPrompt');
+  if (!prompt) { launchPlan(cfg, false); return; }
+
+  const savedAt  = new Date(meta.savedAt);
+  const timeAgo  = formatTimeAgo(savedAt);
+  $('rppStep').textContent  = meta.stepLabel || meta.currentStep;
+  $('rppTime').textContent  = timeAgo;
+  $('rppCount').textContent = `${meta.messageCount} message${meta.messageCount !== 1 ? 's' : ''}`;
+  if (meta.taskPreview) $('rppTask').textContent = meta.taskPreview + (meta.taskPreview.length >= 80 ? '…' : '');
+
+  prompt.classList.remove('hidden');
+
+  $('rppResumeBtn').onclick = () => { prompt.classList.add('hidden'); launchPlan(cfg, true); };
+  $('rppFreshBtn').onclick  = () => { prompt.classList.add('hidden'); launchPlan(cfg, false); };
+  $('rppCancelBtn').onclick = () => { prompt.classList.add('hidden'); pendingPlanConfig = null; };
+}
+
+function formatTimeAgo(date) {
+  const secs = Math.floor((Date.now() - date) / 1000);
+  if (secs < 60)   return `${secs}s ago`;
+  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
+  if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
+  return `${Math.floor(secs / 86400)}d ago`;
+}
+
+
 
 const AGENT_ICONS = {
   copilot: '🤖', claude: '🟠', gemini: '🔵', aider: '🛠️'

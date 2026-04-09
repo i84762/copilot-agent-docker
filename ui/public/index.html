@@ -237,6 +237,23 @@
       </div>
     </div>
 
+    <!-- Resume planning session prompt -->
+    <div id="resumePlanPrompt" class="rpp hidden">
+      <div class="rpp-icon">📂</div>
+      <div class="rpp-body">
+        <div class="rpp-title">Resume planning session?</div>
+        <div class="rpp-meta">
+          Saved <span id="rppTime"></span> · on step <strong id="rppStep"></strong> · <span id="rppCount"></span>
+        </div>
+        <div id="rppTask" class="rpp-task"></div>
+      </div>
+      <div class="rpp-actions">
+        <button id="rppResumeBtn" class="btn btn-primary btn-sm">↩ Resume</button>
+        <button id="rppFreshBtn"  class="btn btn-ghost  btn-sm">✦ Start Fresh</button>
+        <button id="rppCancelBtn" class="btn btn-ghost  btn-sm">✕</button>
+      </div>
+    </div>
+
     <!-- Launch progress — compact strip below toolbar, auto-hides on done -->
     <div id="launchProgress" class="launch-progress hidden">
       <div class="lp-strip">

@@ -334,6 +334,32 @@ select.input-field { cursor: pointer; appearance: none; background-image: url("d
 /* chatPanel uses the same space as #terminal; shown/hidden exclusively */
 #chatPanel { flex: 1; min-height: 0; }
 
+/* ── Resume plan prompt ─────────────────────────────────────────────────────── */
+.rpp {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  animation: rpp-slide-in .2s ease;
+}
+.rpp.hidden { display: none; }
+@keyframes rpp-slide-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.rpp-icon { font-size: 20px; flex-shrink: 0; }
+.rpp-body { flex: 1; min-width: 0; }
+.rpp-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.rpp-meta  { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.rpp-task  {
+  font-size: 11px; color: var(--text-dim); margin-top: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.rpp-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
 /* ── Launch progress — compact strip (replaces full overlay) ───────────────── */
 .launch-progress {
   background: var(--surface);
