@@ -75,6 +75,8 @@ function writeServerConfig(data) {
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(data, null, 2), 'utf8');
   } catch (err) {
     console.error('[config] write failed:', err.message);
+    // Broadcast to all connected clients so the user knows their config wasn't saved
+    broadcast({ type: 'error', message: `Config save failed: ${err.message}` });
   }
 }
 
@@ -455,6 +457,18 @@ wss.on('connection', ws => {
           step('validate',  'Validating configuration',    'ok');
           devLog(`[start] mode=${mode} agent=${msg.config?.agent} project=${msg.config?.projectPath}`);
 
+          // Pre-flight token check for copilot agent
+          const runAgent = (msg.config?.agent || 'copilot').toLowerCase();
+          if (runAgent === 'copilot' && msg.config?.ghToken) {
+            const tok = msg.config.ghToken.trim();
+            if (tok.startsWith('ghp_') || tok.startsWith('gho_') || tok.startsWith('ghu_')) {
+              throw new Error(
+                'Classic PAT detected. Copilot CLI v1.0.21+ requires a fine-grained PAT. ' +
+                'Create one at github.com/settings/personal-access-tokens/new with Models (read) + Repositories (read) + User (read).'
+              );
+            }
+          }
+
           step('docker',    'Connecting to Docker',        'active');
           const dockerInfo = await docker.ping();
           step('docker',    'Docker connected',            'ok');
@@ -534,6 +548,19 @@ wss.on('connection', ws => {
         try {
           stepP('validate', 'Validating configuration',    'ok');
           devLog(`[plan] agent=${msg.config?.agent} project=${msg.config?.projectPath}`);
+
+          // ── Pre-flight: check copilot token type before wasting container startup ─
+          const preAgent = (msg.config?.agent || 'copilot').toLowerCase();
+          if (preAgent === 'copilot' && msg.config?.ghToken) {
+            const tok = msg.config.ghToken.trim();
+            if (tok.startsWith('ghp_') || tok.startsWith('gho_') || tok.startsWith('ghu_')) {
+              throw new Error(
+                'Classic PAT detected (ghp_/gho_/ghu_). GitHub Copilot CLI v1.0.21+ requires a fine-grained PAT. ' +
+                'Create one at github.com/settings/personal-access-tokens/new with Models (read) + Repositories (read) + User (read) permissions. ' +
+                'Alternatively, switch to the Claude agent.'
+              );
+            }
+          }
 
           stepP('docker',   'Connecting to Docker',        'active');
           await docker.ping();
@@ -616,7 +643,10 @@ wss.on('connection', ws => {
             safeSend(ws, { type: 'container_stopped', containerId: container.id });
             safeSend(ws, { type: 'plan_complete' });
           });
-          containerStream.on('error', err => devLog(`[plan stream error] ${err.message}`));
+          containerStream.on('error', err => {
+            devLog(`[plan stream error] ${err.message}`);
+            safeSend(ws, { type: 'chat_system', text: `⚠️ Stream error: ${err.message}` });
+          });
 
           // ── Watch copilot log file for auth errors (surfaced to chat UI) ──────
           // Copilot logs errors to a process log file but never to stdout/PTY.

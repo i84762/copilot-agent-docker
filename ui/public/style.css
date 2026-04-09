@@ -712,6 +712,16 @@ footer#statusBar {
 }
 .help-link:hover { text-decoration: underline; }
 .field-optional { color: var(--text-dim); font-weight: normal; }
+/* Token warning — amber highlight for PAT requirement notice */
+.token-warning {
+  background: rgba(210,153,34,0.10);
+  border: 1px solid rgba(210,153,34,0.30);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+.token-warning strong { color: #d6a835; }
 
 /* ── Setup hint (first-time onboarding) ────────────────────────────────────── */
 .setup-hint {

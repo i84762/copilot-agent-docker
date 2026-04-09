@@ -79,18 +79,37 @@ function connectWS() {
 
   ws.onclose = () => {
     setStatus('Disconnected — reconnecting…', 'error');
+    // If server restarted, active container is gone — reset UI state
+    if (state === 'planning' || state === 'running') {
+      activeContainerId = null;
+      setActiveContainerLabel(null);
+      enterState('idle');
+      appendChatBubble('system', '⚠️ Connection lost. Server may have restarted. Ready for a new session.');
+      scrollChatToBottom();
+    }
     setTimeout(connectWS, 3000);
   };
 
-  ws.onerror = () => {};
+  ws.onerror = (e) => {
+    console.warn('[ws] error:', e.message || e);
+    setStatus('Connection error — reconnecting…', 'error');
+  };
 
   ws.onmessage = ev => {
     let msg;
-    try { msg = JSON.parse(ev.data); } catch { return; }
+    try { msg = JSON.parse(ev.data); } catch (e) {
+      console.warn('[ws] failed to parse message:', e.message);
+      return;
+    }
 
     switch (msg.type) {
 
       case 'connected':
+        break;
+
+      case 'docker_status':
+        // Docker connection updated (e.g. after /api/docker/connect)
+        if (msg.connected) checkImageStatus();
         break;
 
       case 'output': {
@@ -99,7 +118,6 @@ function connectWS() {
         logBuffer += new TextDecoder().decode(raw);
         break;
       }
-
 
       // ── Chat UI events (plan mode) ─────────────────────────────────────────
       // All agents (including copilot/aider) output is routed through chat.
@@ -184,6 +202,15 @@ function connectWS() {
 
       case 'containers_list':
         renderContainerList(msg.containers);
+        // Auto-recover: if we think a container is active but it's gone, reset to idle
+        if (activeContainerId && state !== 'idle') {
+          const stillExists = msg.containers && msg.containers.some(c => c.id === activeContainerId);
+          if (!stillExists) {
+            activeContainerId = null;
+            setActiveContainerLabel(null);
+            enterState('idle');
+          }
+        }
         break;
 
       case 'docker_event':
@@ -222,6 +249,9 @@ function connectWS() {
         setProgressTitle('Failed', 'error');
         // Leave panel visible so user can read the step that failed
         break;
+
+      default:
+        console.debug('[ws] unhandled message type:', msg.type, msg);
     }
   };
 }
