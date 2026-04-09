@@ -874,8 +874,8 @@ wss.on('connection', ws => {
           const list   = await docker.listContainers({ all: false });
           const agents = list
             .filter(c =>
-              c.Labels?.['copilot-agent'] ||
-              c.Image.includes('copilot-agent') ||
+              c.Labels?.['archon'] ||
+              c.Image.includes('archon') ||
               c.Names.some(n => n.includes('copilot')))
             .map(containerSummary);
           safeSend(ws, { type: 'containers_list', containers: agents });
