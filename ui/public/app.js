@@ -312,9 +312,13 @@ function enterState(newState) {
   const inPlanMode = (newState === 'planning');
   $('terminal').classList.toggle('hidden', inPlanMode);
   $('chatPanel').classList.toggle('hidden', !inPlanMode);
-  // Hide chat header and stepper when not in planning mode
-  if (!inPlanMode && $('chatHeader')) $('chatHeader').classList.add('hidden');
-  if (!inPlanMode) hidePlanStepper();
+  // Restore toolbar title and hide stepper when leaving planning mode
+  if (!inPlanMode) {
+    const title = $('terminalTitle');
+    if (title) title.textContent = 'Idle';
+    hidePlanStepper();
+    updateQuotaBadge(null, null, null);
+  }
   // Always clear any lingering progress overlay when switching state
   showLaunchProgress(false);
 
@@ -1227,14 +1231,13 @@ const PLANNING_STEPS = [
 ];
 
 function updateChatHeader(agent, model) {
-  const header = $('chatHeader');
-  if (!header) return;
   const icon = AGENT_ICONS[(agent || '').toLowerCase()] || '🤖';
   const name = (agent || 'Agent').replace(/^\w/, c => c.toUpperCase());
-  $('chatAgentIcon').textContent = icon;
-  $('chatAgentName').textContent = name;
-  $('chatAgentModel').textContent = model || '';
-  header.classList.remove('hidden');
+  const modelStr = model ? ` · ${model}` : '';
+  const title = $('terminalTitle');
+  if (title) {
+    title.innerHTML = `<span style="margin-right:5px">${icon}</span>${name}<span style="font-size:10px;opacity:.6;margin-left:6px;font-family:var(--mono)">${modelStr}</span>`;
+  }
   updateQuotaBadge(null, null, null);
   initPlanStepper();
 }
