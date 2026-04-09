@@ -8,6 +8,8 @@ const path      = require('path');
 const fs        = require('fs');
 const os        = require('os');
 
+const llmPlan   = require('./llm-plan');
+
 const app    = express();
 const server = http.createServer(app);
 const wss    = new WebSocket.Server({ server });
@@ -138,6 +140,18 @@ function safeSend(ws, obj) {
 function broadcast(obj) {
   const msg = JSON.stringify(obj);
   wss.clients.forEach(ws => { if (ws.readyState === WebSocket.OPEN) ws.send(msg); });
+}
+
+// Write the finalized plan to PLAN.md in the project directory
+function writePlanToProject(projectPath, planText) {
+  try {
+    if (!projectPath) return;
+    const planFile = path.join(projectPath, 'PLAN.md');
+    fs.writeFileSync(planFile, planText, 'utf8');
+    console.log(`[plan] PLAN.md written to ${planFile}`);
+  } catch (err) {
+    console.error(`[plan] failed to write PLAN.md: ${err.message}`);
+  }
 }
 
 // Build Docker env array from UI config object
@@ -380,6 +394,7 @@ wss.on('connection', ws => {
   let containerStream = null; // plan mode interactive stream
   let activeId        = null;
   let activePlanAgent = 'copilot'; // track agent type for correct line ending
+  let activePlanSessionId = null;  // non-null when using API-based planning (no container TUI)
   // Chat state — shared between plan_container and chat_input cases
   let agentReady      = false;
   let agentTyping     = false;
@@ -394,6 +409,7 @@ wss.on('connection', ws => {
   function cleanup() {
     if (logStream)       { try { logStream.destroy();       } catch (_) {} logStream       = null; }
     if (containerStream) { try { containerStream.end();     } catch (_) {} containerStream = null; }
+    if (activePlanSessionId) { llmPlan.deleteSession(activePlanSessionId); activePlanSessionId = null; }
   }
 
   ws.on('close', cleanup);
@@ -541,258 +557,84 @@ wss.on('connection', ws => {
         break;
       }
 
-      // ── Start container in plan mode — full interactive PTY ───────────────
+      // ── Start API-based planning session (no Docker TUI needed) ─────────
       case 'plan_container': {
         cleanup();
+        if (activePlanSessionId) { llmPlan.deleteSession(activePlanSessionId); activePlanSessionId = null; }
 
         function stepP(id, text, status) {
           safeSend(ws, { type: 'progress', step: id, text, status });
         }
 
         try {
-          stepP('validate', 'Validating configuration',    'ok');
-          devLog(`[plan] agent=${msg.config?.agent} project=${msg.config?.projectPath}`);
+          stepP('validate', 'Validating configuration', 'ok');
+          const planAgent = (msg.config?.agent || 'copilot').toLowerCase();
+          activePlanAgent = planAgent;
+          devLog(`[plan] agent=${planAgent} project=${msg.config?.projectPath}`);
 
-          // ── Pre-flight: check copilot token type before wasting container startup ─
-          const preAgent = (msg.config?.agent || 'copilot').toLowerCase();
-          if (preAgent === 'copilot' && msg.config?.ghToken) {
+          // Token pre-flight for copilot (GitHub Models API uses same fine-grained PAT)
+          if (planAgent === 'copilot' && msg.config?.ghToken) {
             const tok = msg.config.ghToken.trim();
             if (tok.startsWith('ghp_') || tok.startsWith('gho_') || tok.startsWith('ghu_')) {
               throw new Error(
-                'Classic PAT detected (ghp_/gho_/ghu_). GitHub Copilot CLI v1.0.21+ requires a fine-grained PAT. ' +
-                'Create one at github.com/settings/personal-access-tokens/new with Models (read) + Repositories (read) + User (read) permissions. ' +
-                'Alternatively, switch to the Claude agent.'
+                'Classic PAT detected (ghp_/gho_/ghu_). The GitHub Models API requires a fine-grained PAT. ' +
+                'Create one at github.com/settings/personal-access-tokens/new with Models (read) permission, ' +
+                'or switch to the Claude agent.'
               );
             }
           }
 
-          stepP('docker',   'Connecting to Docker',        'active');
-          await docker.ping();
-          stepP('docker',   'Docker connected',            'ok');
+          stepP('docker', 'Reading project files', 'active');
+          // Planning uses direct LLM API — no Docker container needed for the chat phase.
+          // The container is only started when the user clicks "Execute Plan".
+          activePlanSessionId = llmPlan.startPlanSession(msg.config);
+          devLog(`[plan] API session started: ${activePlanSessionId} agent=${planAgent}`);
+          stepP('docker', 'Project context loaded', 'ok');
 
-          stepP('image',    'Checking agent image',        'active');
-          try { await docker.getImage('archon:latest').inspect(); }
-          catch { throw new Error('Image archon:latest not found — build it first via "🔨 Build Image"'); }
-          stepP('image',    'Image ready',                 'ok');
-
-          // ── CRITICAL: attach BEFORE start so we capture all output ──────────
-          stepP('create',   'Creating container (plan mode)', 'active');
-          const container = await createContainer(msg.config, 'plan');
-          activeId = container.id;
-          devLog(`[plan] containerId=${container.id}`);
-
-          // Declare planAgent early — needed by the stream handler below
-          const planAgent = (msg.config?.agent || 'copilot').toLowerCase();
-          activePlanAgent = planAgent;
-
-          stepP('attach',   'Attaching interactive PTY',   'active');
-          containerStream = await container.attach({
-            stream: true, stdin: true, stdout: true, stderr: true, hijack: true,
-          });
-          devLog(`[plan] PTY attached — starting container`);
-
-          // ── All agents → chat UI (ANSI stripped, debounced bubbles) ──────────
-          // Route all output through chat UI. Output BEFORE the initial planning
-          // message is sent (entrypoint.sh startup banner, copilot TUI init) goes
-          // only to devLog so the chat stays clean. Once agentReady=true, all
-          // visible text is forwarded to chat bubbles.
-          agentReady  = false;
-          agentTyping = false;
-          if (chatDebounce) { clearTimeout(chatDebounce); chatDebounce = null; }
-          const DEBOUNCE_MS  = 2000;
-
-          containerStream.on('data', chunk => {
-            const rawBytes = chunk.length;
-            const raw  = chunk.toString('utf8');
-            const text = stripAnsi(raw);
-            devLog(`[plan stream] ${rawBytes}b → ${text.length}ch visible${agentReady ? '' : ' (startup, suppressed)'}`);
-            if (!agentReady || !text) return;
-
-            // Signal typing indicator on first chunk of a new message
-            if (!agentTyping) {
-              agentTyping = true;
-              safeSend(ws, { type: 'chat_typing' });
-            }
-
-            safeSend(ws, { type: 'chat_chunk', text });
-
-            // Debounce: silence longer than DEBOUNCE_MS → end of agent response
-            if (chatDebounce) clearTimeout(chatDebounce);
-            chatDebounce = setTimeout(() => {
-              agentTyping = false;
-              safeSend(ws, { type: 'chat_message_end' });
-            }, DEBOUNCE_MS);
-          });
-
-          containerStream.on('end', async () => {
-            devLog(`[plan] stream ended for ${container.id}`);
-            if (chatDebounce) clearTimeout(chatDebounce);
-
-            // Fetch container exit code to surface in logs
-            try {
-              const info = await container.inspect();
-              const exitCode = info.State?.ExitCode;
-              devLog(`[plan] container exit code: ${exitCode}`);
-              if (exitCode !== 0) {
-                // Fetch last lines of docker logs for diagnosis
-                const rawLogs = await container.logs({ stdout: true, stderr: true, tail: 30 });
-                const lastLines = rawLogs.toString('utf8').replace(/[\x00-\x08\x0e-\x1f\x7f]/g, '').trim();
-                devLog(`[plan] container last logs:\n${lastLines}`);
-                safeSend(ws, { type: 'chat_system', text: `⚠️ Container exited with code ${exitCode}. Check Dev Logs for details.` });
-              }
-            } catch (e) { devLog(`[plan] inspect after exit failed: ${e.message}`); }
-
-            safeSend(ws, { type: 'chat_message_end' });
-            safeSend(ws, { type: 'chat_system', text: '📋 Planning session ended — click Execute Plan to run.' });
-            safeSend(ws, { type: 'container_stopped', containerId: container.id });
-            safeSend(ws, { type: 'plan_complete' });
-          });
-          containerStream.on('error', err => {
-            devLog(`[plan stream error] ${err.message}`);
-            safeSend(ws, { type: 'chat_system', text: `⚠️ Stream error: ${err.message}` });
-          });
-
-          // ── Watch copilot log file for auth errors (surfaced to chat UI) ──────
-          // Copilot logs errors to a process log file but never to stdout/PTY.
-          // Poll the log dir and tail the newest log file to catch auth failures.
-          if (planAgent === 'copilot') {
-            const logPollTimer = setInterval(async () => {
-              try {
-                const exec = await container.exec({
-                  Cmd: ['bash', '-c',
-                    'f=$(ls -t /workspace/.copilot-session/copilot-home/logs/process-*.log 2>/dev/null | head -1); ' +
-                    '[ -f "$f" ] && grep -E "ERROR|Logged out|not supported|unauthorized|unauthenticated" "$f" | tail -5'],
-                  AttachStdout: true, AttachStderr: false,
-                });
-                const s = await exec.start({ hijack: false, stdin: false });
-                let out = '';
-                s.on('data', d => { out += d.toString('utf8').replace(/[\x00-\x08]/g, ''); });
-                s.on('end', () => {
-                  if (!out.trim()) return;
-                  if (out.includes('Classic PATs are not supported')) {
-                    clearInterval(logPollTimer);
-                    safeSend(ws, { type: 'chat_system',
-                      text: '❌ **Authentication failed:** Your GitHub token is a Classic PAT, which Copilot CLI v1.0.21 no longer supports.\n\n' +
-                            '**Fix options:**\n' +
-                            '1. Switch to the **Claude** agent (recommended — no GitHub auth needed, add ANTHROPIC_API_KEY)\n' +
-                            '2. Generate a **fine-grained PAT** at github.com/settings/tokens?type=beta and update your GH_TOKEN' });
-                  } else if (out.includes('Logged out') || out.includes('unauthorized') || out.includes('unauthenticated')) {
-                    clearInterval(logPollTimer);
-                    safeSend(ws, { type: 'chat_system',
-                      text: '❌ **Copilot authentication failed.** Check your GH_TOKEN and ensure it has Copilot access. Check Dev Logs for details.' });
-                    devLog(`[plan auth-check] errors found:\n${out.trim()}`);
-                  }
-                });
-              } catch (_) { /* container may have exited */ clearInterval(logPollTimer); }
-            }, 5000);
-            // Stop polling once agentReady (message sent) + 60s
-            setTimeout(() => clearInterval(logPollTimer), 90000);
-          }
-
-          await container.start();
-          stepP('create',   'Container started',           'ok');
-          stepP('attach',   'Interactive session ready',   'ok');
-
-          // ── Auto-setup: grant permissions then send initial planning message ─
-          const planTask     = (msg.config?.task     || '').trim();
-          const planTaskFile = (msg.config?.taskFile || '').trim();
-
-          // Build rich initial message. The instructions file (written by plan-mode.sh)
-          // provides the system context / "how to behave"; this message provides the WHAT.
-          let taskBlock = '';
-          if (planTask) taskBlock += '## Task / Requirements\n\n' + planTask + '\n\n';
-          if (planTaskFile) {
-            taskBlock += '## Additional requirements file\n\nA requirements file was provided at: `' +
-              planTaskFile + '`\n' +
-              'Please read it: `cat "/workspace/' + planTaskFile.replace(/\\/g, '/').replace(/^[A-Za-z]:\//, '') + '" 2>/dev/null`\n\n';
-          }
-          if (!taskBlock) taskBlock = '## Task\n\n(No task provided — please ask the user what they want to build.)\n\n';
-
-          const INITIAL_PLAN_MSG = taskBlock +
-            '## Your mission\n\n' +
-            'You are the planning agent in a **fully automated development pipeline**. ' +
-            'After this planning session, a separate AI agent will receive PLAN.md as its only input ' +
-            'and execute every milestone **completely autonomously** — no humans, no clarification, no stopping. ' +
-            'The plan you write is the sole source of truth. Make it thorough.\n\n' +
-            '## Begin: deep exploration first\n\n' +
-            'Before writing a single word of your response, run ALL of these:\n' +
-            '- `find /workspace -type f | grep -v \'.git\\|node_modules\\|.dart_tool\\|build\\|.pub-cache\' | sort | head -150`\n' +
-            '- Read the project manifest (pubspec.yaml / package.json / go.mod / Cargo.toml / pom.xml)\n' +
-            '- Read entry points, core architecture files, state management, routing\n' +
-            '- Read EVERY requirements/spec/task document in /workspace\n' +
-            '- `git -C /workspace log --oneline -30` — understand recent history\n' +
-            '- `find /workspace -name \'*_test*\' -o -name \'*.test.*\' -o -name \'*.spec.*\' | grep -v node_modules | head -30`\n\n' +
-            '## Then return ONE structured analysis with ALL these sections:\n\n' +
-            '1. **Project Overview** — stack, architecture, key components, current state\n' +
-            '2. **Requirements Analysis** — what you understood + mapping to affected code\n' +
-            '3. **Gaps & Ambiguities** — numbered, exhaustive — every unclear or underspecified requirement\n' +
-            '4. **Technical Risks** — breaking changes, conflicts, constraints from existing patterns\n' +
-            '5. **Suggestions** — better approaches, simplifications, scope recommendations\n' +
-            '6. **Clarifying Questions** — numbered — every answer that would meaningfully change the plan\n\n' +
-            'Do NOT write code. Do NOT write PLAN.md yet. Deliver the analysis only.\n' +
-            'I will answer your questions, then you write the plan.';
-
-          // Write the initial planning brief to a file in the container so we can
-          // send a single-line prompt to the agent PTY (multiline stdin writes
-          // send multiple Enter keypresses, confusing TUI apps like copilot).
-          const writeBrief = async () => {
-            try {
-              const exec = await container.exec({
-                Cmd: ['bash', '-c', `cat > /workspace/.planning-brief.md << 'BRIEFEOF'\n${INITIAL_PLAN_MSG}\nBRIEFEOF`],
-                AttachStdout: true, AttachStderr: true,
-              });
-              const s = await exec.start({ hijack: true, stdin: false });
-              await new Promise(r => s.on('end', r));
-              devLog('[plan auto-setup] planning brief written to /workspace/.planning-brief.md');
-            } catch (e) {
-              devLog(`[plan auto-setup] brief write failed: ${e.message}`);
-            }
-          };
-
-          if (planAgent === 'copilot') {
-            // Step 1 (15s): send /allow-all to grant filesystem permissions
-            setTimeout(() => {
-              if (containerStream) {
-                devLog('[plan auto-setup] sending /allow-all');
-                containerStream.write(Buffer.from('/allow-all\r'));
-              }
-            }, 15000);
-            // Step 2 (20s): write brief + send trigger + flip agentReady
-            setTimeout(async () => {
-              await writeBrief();
-              if (containerStream) {
-                devLog('[plan auto-setup] sending initial planning message');
-                agentReady = true;
-                safeSend(ws, { type: 'chat_system', text: '🔍 Agent is now exploring your project — this may take several minutes…' });
-                safeSend(ws, { type: 'chat_typing' });
-                agentTyping = true;
-                containerStream.write(Buffer.from(
-                  'Please read /workspace/.planning-brief.md and follow all instructions in it exactly. ' +
-                  'Start by running the exploration commands listed there before writing your first response.\r'
-                ));
-              }
-            }, 20000);
-          } else {
-            // claude/gemini/aider: write brief then send single-line trigger
-            const delay = planAgent === 'claude' ? 4000 : 5000;
-            setTimeout(async () => {
-              await writeBrief();
-              if (containerStream) {
-                devLog('[plan auto-setup] sending initial planning message');
-                agentReady = true;
-                safeSend(ws, { type: 'chat_system', text: '🔍 Agent is now exploring your project…' });
-                safeSend(ws, { type: 'chat_typing' });
-                agentTyping = true;
-                containerStream.write(Buffer.from(
-                  'Please read /workspace/.planning-brief.md and follow all instructions in it exactly. ' +
-                  'Start by running the exploration commands listed there before writing your first response.\n'
-                ));
-              }
-            }, delay);
-          }
+          stepP('image',  'Connecting to LLM API', 'active');
+          stepP('create', 'Ready', 'ok');
+          stepP('attach', 'Chat session open', 'ok');
+          stepP('attach', 'Chat session open', 'ok');
 
           safeSend(ws, { type: 'progress_done' });
-          safeSend(ws, { type: 'container_started', containerId: container.id, mode: 'plan' });
+          // Use a virtual container ID so the client state machine works normally
+          const virtualId = `plan-api-${Date.now()}`;
+          activeId = virtualId;
+          safeSend(ws, { type: 'container_started', containerId: virtualId, mode: 'plan' });
+          devLog('[plan] plan_container virtual session ready — sending initial message');
+
+          // Send the first message automatically
+          const initialMsg =
+            'Please start by analyzing the task and codebase deeply. ' +
+            'Run thorough exploration, identify all gaps and ambiguities, ' +
+            'and return your structured analysis with clarifying questions before writing the plan.';
+
+          safeSend(ws, { type: 'chat_typing' });
+          agentTyping = true;
+
+          llmPlan.sendPlanMessage(
+            activePlanSessionId,
+            initialMsg,
+            (chunk) => { safeSend(ws, { type: 'chat_chunk', text: chunk }); },
+            (_full) => {
+              agentTyping = false;
+              safeSend(ws, { type: 'chat_message_end' });
+              // Check if plan is already finalized
+              const plan = llmPlan.extractFinalPlan(activePlanSessionId);
+              if (plan) {
+                writePlanToProject(msg.config?.projectPath, plan);
+                safeSend(ws, { type: 'plan_complete' });
+              }
+            },
+            (err) => {
+              agentTyping = false;
+              devLog(`[plan api error] ${err.message}`);
+              safeSend(ws, { type: 'chat_system', text: `⚠️ LLM API error: ${err.message}` });
+              safeSend(ws, { type: 'chat_message_end' });
+            }
+          );
+
+          stepP('image', 'LLM API connected', 'ok');
 
         } catch (err) {
           devLog(`[plan error] ${err.stack || err.message}`);
@@ -804,18 +646,52 @@ wss.on('connection', ws => {
 
       // ── Send user message to planning chat ────────────────────────────────
       case 'chat_input': {
-        if (containerStream && msg.text) {
+        if (!msg.text) break;
+
+        // API-based planning session
+        if (activePlanSessionId) {
           try {
-            devLog(`[chat_input] ${msg.text.slice(0, 120)}`);
-            // Ensure agent is in ready mode (user reply always enables output)
-            agentReady = true;
-            // Show typing indicator immediately so user gets feedback
+            devLog(`[chat_input api] ${msg.text.slice(0, 120)}`);
             if (!agentTyping) {
               agentTyping = true;
               safeSend(ws, { type: 'chat_typing' });
             }
-            // copilot and aider are TUI apps running in raw PTY mode — they expect
-            // \r (Enter key) not \n to submit a message. Claude/Gemini use line mode (\n).
+            llmPlan.sendPlanMessage(
+              activePlanSessionId,
+              msg.text,
+              (chunk) => { safeSend(ws, { type: 'chat_chunk', text: chunk }); },
+              (_full) => {
+                agentTyping = false;
+                safeSend(ws, { type: 'chat_message_end' });
+                const plan = llmPlan.extractFinalPlan(activePlanSessionId);
+                if (plan) {
+                  const sess = llmPlan.getSession(activePlanSessionId);
+                  writePlanToProject(sess?.config?.projectPath, plan);
+                  safeSend(ws, { type: 'plan_complete' });
+                }
+              },
+              (err) => {
+                agentTyping = false;
+                devLog(`[chat_input api error] ${err.message}`);
+                safeSend(ws, { type: 'chat_system', text: `⚠️ LLM API error: ${err.message}` });
+                safeSend(ws, { type: 'chat_message_end' });
+              }
+            );
+          } catch (err) {
+            safeSend(ws, { type: 'error', message: `Chat input: ${err.message}` });
+          }
+          break;
+        }
+
+        // Container stream fallback (execution phase / other modes)
+        if (containerStream) {
+          try {
+            devLog(`[chat_input stream] ${msg.text.slice(0, 120)}`);
+            agentReady = true;
+            if (!agentTyping) {
+              agentTyping = true;
+              safeSend(ws, { type: 'chat_typing' });
+            }
             const lineEnd = (activePlanAgent === 'copilot' || activePlanAgent === 'aider') ? '\r' : '\n';
             containerStream.write(Buffer.from(msg.text + lineEnd));
           } catch (err) {
