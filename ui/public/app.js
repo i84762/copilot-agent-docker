@@ -339,7 +339,7 @@ function enterState(newState) {
     const title = $('terminalTitle');
     if (title) title.textContent = 'Idle';
     hidePlanStepper();
-    $('headerModelSelect')?.classList.add('hidden');
+    toggleModelPicker(true);
     _chatHeaderAgent = '';
   }
   // Only hide quota badge when truly idle (no active session)
@@ -1356,6 +1356,7 @@ const PLANNING_STEPS = [
 ];
 
 let _chatHeaderAgent = '';
+let _headerModels    = [];  // [{id, name}] for the current agent
 
 function updateChatHeader(agent, model) {
   _chatHeaderAgent = agent || '';
@@ -1363,65 +1364,78 @@ function updateChatHeader(agent, model) {
   const name = (_chatHeaderAgent || 'Agent').replace(/^\w/, c => c.toUpperCase());
   const title = $('terminalTitle');
   if (title) {
-    title.innerHTML = `<span style="margin-right:5px">${icon}</span>${name}`;
+    const modelChip = model
+      ? `<span id="modelChip" class="model-chip" title="Click to change model">${model} ▾</span>`
+      : '';
+    title.innerHTML = `<span style="margin-right:5px">${icon}</span>${name}${modelChip}`;
+    $('modelChip')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleModelPicker();
+    });
   }
-
-  // Populate the inline model select from the config panel's model dropdown
-  const headerSel = $('headerModelSelect');
-  if (headerSel) {
-    const srcSelId = { copilot: 'copilotModel', claude: 'claudeModel', gemini: 'geminiModel' }[_chatHeaderAgent];
-    const srcSel = srcSelId ? $(srcSelId) : null;
-    headerSel.innerHTML = '';
-    if (srcSel && srcSel.options.length) {
-      [...srcSel.options].forEach(o => {
-        const opt = document.createElement('option');
-        opt.value = o.value;
-        opt.textContent = o.textContent;
-        headerSel.appendChild(opt);
-      });
-      headerSel.value = model || srcSel.value;
-    } else if (model) {
-      const opt = document.createElement('option');
-      opt.value = model; opt.textContent = model;
-      headerSel.appendChild(opt);
-      headerSel.value = model;
-    }
-    headerSel.classList.toggle('hidden', !srcSel && !model);
-  }
-
   updateQuotaBadge(null, null, null);
   initPlanStepper();
 }
 
-// Keep header model select in sync when config panel model is refreshed
-function syncHeaderModelSelect() {
-  if (!_chatHeaderAgent) return;
-  const headerSel = $('headerModelSelect');
-  if (!headerSel || headerSel.classList.contains('hidden')) return;
+function toggleModelPicker(forceClose) {
+  const picker = $('modelPicker');
+  if (!picker) return;
+  if (forceClose || !picker.classList.contains('hidden')) {
+    picker.classList.add('hidden');
+    return;
+  }
+  // Rebuild picker options from source select
   const srcSelId = { copilot: 'copilotModel', claude: 'claudeModel', gemini: 'geminiModel' }[_chatHeaderAgent];
   const srcSel = srcSelId ? $(srcSelId) : null;
-  if (!srcSel) return;
-  const prev = headerSel.value;
-  headerSel.innerHTML = '';
+  if (!srcSel || !srcSel.options.length) return;
+  const current = srcSel.value;
+  picker.innerHTML = '';
   [...srcSel.options].forEach(o => {
-    const opt = document.createElement('option');
-    opt.value = o.value; opt.textContent = o.textContent;
-    headerSel.appendChild(opt);
+    const item = document.createElement('div');
+    item.className = 'mp-item' + (o.value === current ? ' mp-active' : '');
+    item.textContent = o.textContent;
+    item.dataset.value = o.value;
+    item.addEventListener('click', () => {
+      switchHeaderModel(o.value);
+      picker.classList.add('hidden');
+    });
+    picker.appendChild(item);
   });
-  headerSel.value = prev || srcSel.value;
+  // Position below the chip
+  const chip = $('modelChip');
+  if (chip) {
+    const rect = chip.getBoundingClientRect();
+    picker.style.left = rect.left + 'px';
+    picker.style.top  = (rect.bottom + 4) + 'px';
+  }
+  picker.classList.remove('hidden');
 }
 
-// When user picks a model from the header select, notify the server
-$('headerModelSelect')?.addEventListener('change', () => {
-  const model = $('headerModelSelect').value;
+function switchHeaderModel(model) {
   if (!model) return;
-  // Mirror into config panel select
+  // Update chip text
+  const chip = $('modelChip');
+  if (chip) chip.textContent = model + ' ▾';
+  // Mirror to config panel select
   const srcSelId = { copilot: 'copilotModel', claude: 'claudeModel', gemini: 'geminiModel' }[_chatHeaderAgent];
   if (srcSelId && $(srcSelId)) $(srcSelId).value = model;
   saveForm();
   wsSend({ type: 'switch_model', model });
-  toast(`Model switched to ${model}`, 'success');
-});
+  toast(`Model → ${model}`, 'success');
+}
+
+// Keep chip text in sync when fetchModels() refreshes the source dropdown
+function syncHeaderModelSelect() {
+  if (!_chatHeaderAgent) return;
+  const chip = $('modelChip');
+  if (!chip) return;
+  const srcSelId = { copilot: 'copilotModel', claude: 'claudeModel', gemini: 'geminiModel' }[_chatHeaderAgent];
+  const srcSel = srcSelId ? $(srcSelId) : null;
+  if (srcSel?.value) chip.textContent = srcSel.value + ' ▾';
+}
+
+// Close picker when clicking outside
+document.addEventListener('click', () => toggleModelPicker(true));
 
 // ── Planning stepper ──────────────────────────────────────────────────────────
 

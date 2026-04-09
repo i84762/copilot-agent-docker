@@ -393,10 +393,9 @@ async function fetchCopilotModels(token) {
   });
   if (!res.ok) throw new Error(`GitHub Models API ${res.status}`);
   const data = await res.json();
-  const list = (data.data || data || []);
+  const list = Array.isArray(data) ? data : (data.data || []);
   return list
-    .filter(m => m.capabilities?.type === 'chat' || m.object === 'model')
-    .map(m => ({ id: m.id || m.name, name: m.name || m.id }))
+    .map(m => ({ id: m.id || m.name, name: m.friendly_name || m.display_name || m.name || m.id }))
     .filter(m => m.id)
     .sort((a, b) => a.id.localeCompare(b.id));
 }
