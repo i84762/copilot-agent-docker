@@ -475,113 +475,111 @@ select.input-field { cursor: pointer; appearance: none; background-image: url("d
 .quota-badge.quota-low    { border-color: var(--red);    color: var(--red);    background: rgba(248,81,73,.08);  }
 .quota-badge.hidden { display: none; }
 
-/* ── Planning phase sidebar — floating vertical strip on right of chat ──────── */
+/* ── Planning phase timeline — floating vertical line, right edge of chat ───── */
 #chatPanel { position: relative; }
 
 .plan-stepper {
   position: absolute;
-  top: 0; right: 0; bottom: 0;
-  width: 40px;
+  top: 0; right: 14px; bottom: 0;
+  width: 20px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 14px 0;
-  gap: 0;
-  background: var(--surface);
-  border-left: 1px solid var(--border);
+  pointer-events: none;   /* float over content, don't block clicks */
   z-index: 10;
-  overflow: hidden;
 }
 .plan-stepper.hidden { display: none; }
 
-/* When stepper visible, indent messages so they don't go under it */
-#chatPanel:has(#planStepper:not(.hidden)) .chat-messages {
-  padding-right: 52px;
+/* The continuous vertical line running through all nodes */
+.plan-stepper::before {
+  content: '';
+  position: absolute;
+  top: 16px; bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 2px;
+  background: var(--border2);
+  border-radius: 1px;
 }
 
 .plan-stepper-track {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0;
   width: 100%;
   flex: 1;
+  padding: 14px 0;
+  gap: 0;
 }
 
 .ps-step {
   display: flex;
-  flex-direction: column;
   align-items: center;
+  justify-content: center;
   width: 100%;
-  padding: 6px 0;
-  position: relative;
-  cursor: default;
   flex: 1;
-}
-/* vertical connector line between steps */
-.ps-step:not(:last-child)::after {
-  content: '';
-  position: absolute;
-  bottom: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 1px;
-  height: 8px;
-  background: var(--border2);
+  position: relative;
+  pointer-events: all;   /* re-enable for tooltip */
+  cursor: default;
 }
 
 .ps-icon {
-  font-size: 12px;
-  line-height: 1;
-  width: 26px; height: 26px;
+  width: 10px; height: 10px;
   border-radius: 50%;
-  display: flex; align-items: center; justify-content: center;
+  background: var(--border2);
+  border: 2px solid var(--surface);
+  box-shadow: 0 0 0 1.5px var(--border2);
   flex-shrink: 0;
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  transition: background .2s, border-color .2s, box-shadow .2s;
+  transition: background .2s, box-shadow .2s;
+  position: relative;
+  z-index: 1;
 }
-.ps-label { display: none; }  /* label shown only in tooltip */
+.ps-label { display: none; }
 
-/* Tooltip — show step label on hover */
+/* Tooltip — label floats left of the node */
 .ps-step[title]:hover::before {
   content: attr(title);
   position: absolute;
-  right: calc(100% + 8px);
+  right: calc(100% + 6px);
   top: 50%;
   transform: translateY(-50%);
-  background: var(--surface);
+  background: rgba(13,17,23,.92);
   border: 1px solid var(--border2);
   color: var(--text);
-  font-size: 11px;
+  font-size: 10.5px;
   white-space: nowrap;
   padding: 3px 8px;
   border-radius: 4px;
   pointer-events: none;
-  z-index: 20;
+  z-index: 30;
 }
 
 /* States */
-.ps-step.ps-pending .ps-icon { color: var(--text-dim); }
+.ps-step.ps-pending .ps-icon {
+  background: var(--border2);
+  box-shadow: 0 0 0 1.5px var(--border2);
+}
 
 .ps-step.ps-active .ps-icon {
-  background: rgba(139,92,246,.15);
-  border-color: var(--purple);
-  color: var(--purple);
+  width: 14px; height: 14px;
+  background: var(--purple);
+  box-shadow: 0 0 0 3px rgba(139,92,246,.3);
+  border-color: var(--bg);
   animation: ps-pulse 1.4s ease-in-out infinite;
 }
 
 .ps-step.ps-done .ps-icon {
-  background: rgba(63,185,80,.12);
-  border-color: var(--green);
-  color: var(--green);
-  font-style: normal;
+  background: var(--green);
+  box-shadow: 0 0 0 1.5px var(--green);
+  border-color: var(--bg);
 }
 
 @keyframes ps-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(139,92,246,.4); }
-  50%       { box-shadow: 0 0 0 4px rgba(139,92,246,.0); }
+  0%, 100% { box-shadow: 0 0 0 3px rgba(139,92,246,.25); }
+  50%       { box-shadow: 0 0 0 6px rgba(139,92,246,.0);  }
 }
+
+
 
 .chat-messages {
   flex: 1;

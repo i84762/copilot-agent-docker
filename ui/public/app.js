@@ -1269,8 +1269,8 @@ function initPlanStepper() {
     const el = document.createElement('div');
     el.className = 'ps-step ps-pending';
     el.id = `ps-${step.id}`;
-    el.title = step.label;  // shown as tooltip on hover
-    el.innerHTML = `<span class="ps-icon">${step.icon}</span>`;
+    el.title = step.label;
+    el.innerHTML = `<span class="ps-icon"></span>`;
     track.appendChild(el);
   });
   stepper.classList.remove('hidden');
@@ -1286,12 +1286,9 @@ function updatePlanStep(stepId, done) {
       found = true;
       el.classList.remove('ps-pending', 'ps-active', 'ps-done');
       el.classList.add(done ? 'ps-done' : 'ps-active');
-      if (done) el.querySelector('.ps-icon').textContent = '✓';
     } else if (!found) {
-      // steps before current → done
       el.classList.remove('ps-pending', 'ps-active');
       el.classList.add('ps-done');
-      el.querySelector('.ps-icon').textContent = '✓';
     }
   });
 }
