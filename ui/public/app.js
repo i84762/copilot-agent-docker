@@ -1,4 +1,4 @@
-/* ── Copilot Agent UI — app.js ──────────────────────────────────────────────
+/* ── Archon — app.js ────────────────────────────────────────────────────────
  *  State machine:
  *    idle       → user fills form, no active container
  *    planning   → container running in plan mode (interactive terminal)
@@ -39,7 +39,7 @@ term.loadAddon(fitAddon);
 term.open(document.getElementById('terminal'));
 fitAddon.fit();
 
-term.writeln('\x1b[90mCopilot Agent UI — ready.\x1b[0m');
+term.writeln('\x1b[90mArchon — ready.\x1b[0m');
 term.writeln('\x1b[90mFill in the form on the left and click Plan or Start.\x1b[0m\r\n');
 
 // Resize observer → keep xterm fitted
@@ -47,6 +47,13 @@ const resizeObs = new ResizeObserver(() => fitAddon.fit());
 resizeObs.observe(document.getElementById('terminalPanel'));
 
 window.addEventListener('resize', () => fitAddon.fit());
+
+// ── xterm keyboard input → container stdin (used for TUI plan agents) ─────────
+let termInputEnabled = false; // only forward keys when a TUI plan session is active
+term.onData(data => {
+  if (!termInputEnabled) return;
+  wsSend({ type: 'terminal_input', data: btoa(data) });
+});
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -90,6 +97,20 @@ function connectWS() {
         const raw = Uint8Array.from(atob(msg.data), c => c.charCodeAt(0));
         term.write(raw);
         logBuffer += new TextDecoder().decode(raw);
+        break;
+      }
+
+      // ── TUI agents (copilot/aider): raw PTY bytes → xterm ────────────────
+      case 'plan_raw': {
+        const raw = Uint8Array.from(atob(msg.data), c => c.charCodeAt(0));
+        term.write(raw);
+        // First time: switch from chat view to terminal view (TUI agent)
+        if ($('terminal').classList.contains('hidden')) {
+          $('terminal').classList.remove('hidden');
+          $('chatPanel').classList.add('hidden');
+          termInputEnabled = true; // enable keyboard passthrough to container
+          fitAddon.fit();
+        }
         break;
       }
 
@@ -146,6 +167,7 @@ function connectWS() {
         break;
 
       case 'container_stopped':
+        termInputEnabled = false; // stop forwarding keys to container
         if (state === 'planning') {
           enterState('plan_done');
         } else {
@@ -157,6 +179,7 @@ function connectWS() {
         break;
 
       case 'plan_complete':
+        termInputEnabled = false; // stop forwarding keys to container
         enterState('plan_done');
         toast('Plan complete — click Execute Plan to run', 'success');
         break;
@@ -309,8 +332,8 @@ function renderAgentCard(agent) {
 // ── Setup hint (first-time) ───────────────────────────────────────────────────
 
 function checkSetupHint() {
-  const saved = localStorage.getItem(STORAGE_KEY);
-  if (!saved) {
+  const hasToken = ($('ghToken')?.value || $('anthropicApiKey')?.value || '').trim();
+  if (!hasToken) {
     $('setupHint').classList.remove('hidden');
   } else {
     $('setupHint').classList.add('hidden');
@@ -476,12 +499,11 @@ function validateConfig() {
 // ── Persistence ───────────────────────────────────────────────────────────────
 // Global fields (tokens, keys, instructions, defaults) → server-side config file
 //   Persists across browsers, survives page reload, shared with remote clients.
-// Session fields (project path, task) → localStorage only (per-browser).
 
-const STORAGE_KEY = 'copilot-agent-ui-session';
+// All config is stored server-side via GET/POST /api/config.
+// No localStorage — single source of truth, easy to export/migrate.
 
-// Fields saved server-side (shared across all clients)
-const GLOBAL_FIELDS = [
+const ALL_FIELDS = [
   'agent',
   'ghToken','anthropicApiKey','geminiApiKey','openaiApiKey',
   'anthropicApiKey2','geminiApiKey2','aiderModel',
@@ -490,23 +512,15 @@ const GLOBAL_FIELDS = [
   'firebaseProjectId','gcloudKeyFile','firebaseTestDevice',
   'sessionName','projectPath','task','taskFile',
 ];
-const GLOBAL_CHECKBOXES = ['useHostInstructions'];
+const ALL_CHECKBOXES = ['useHostInstructions'];
 
-// SESSION_FIELDS still written to localStorage as a fallback cache
-const SESSION_FIELDS = ['sessionName','projectPath','task','taskFile'];
-
-let _saveGlobalTimer = null;
-function saveGlobalConfig() {
-  // Debounce — only write after 800 ms of quiet
-  clearTimeout(_saveGlobalTimer);
-  _saveGlobalTimer = setTimeout(() => {
+let _saveTimer = null;
+function saveForm() {
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(() => {
     const data = {};
-    GLOBAL_FIELDS.forEach(id => {
-      const el = $(id); if (el) data[id] = el.value;
-    });
-    GLOBAL_CHECKBOXES.forEach(id => {
-      const el = $(id); if (el) data[id] = el.checked;
-    });
+    ALL_FIELDS.forEach(id => { const el = $(id); if (el) data[id] = el.value; });
+    ALL_CHECKBOXES.forEach(id => { const el = $(id); if (el) data[id] = el.checked; });
     fetch('/api/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -515,48 +529,13 @@ function saveGlobalConfig() {
   }, 800);
 }
 
-function saveSessionConfig() {
-  const data = {};
-  SESSION_FIELDS.forEach(id => {
-    const el = $(id); if (el) data[id] = el.value;
-  });
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch (_) {}
-}
-
-function saveForm() {
-  saveGlobalConfig();
-  saveSessionConfig();
-}
-
-function applyConfig(data) {
-  if (!data) return;
-  GLOBAL_FIELDS.forEach(id => {
-    const el = $(id);
-    if (el && id in data) el.value = data[id];
-  });
-  GLOBAL_CHECKBOXES.forEach(id => {
-    const el = $(id);
-    if (el && id in data) el.checked = data[id];
-  });
-}
-
-function applySession(data) {
-  if (!data) return;
-  SESSION_FIELDS.forEach(id => {
-    const el = $(id);
-    if (el && id in data) el.value = data[id];
-  });
-}
-
-// loadForm: fetches server config first, then overlays localStorage session data
 async function loadForm() {
   try {
     const res = await fetch('/api/config');
-    if (res.ok) applyConfig(await res.json());
-  } catch (_) {}
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) applySession(JSON.parse(raw));
+    if (!res.ok) return;
+    const data = await res.json();
+    ALL_FIELDS.forEach(id => { const el = $(id); if (el && id in data) el.value = data[id]; });
+    ALL_CHECKBOXES.forEach(id => { const el = $(id); if (el && id in data) el.checked = data[id]; });
   } catch (_) {}
 }
 
@@ -729,7 +708,7 @@ $('downloadLogsBtn').addEventListener('click', () => {
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
   a.href     = url;
-  a.download = `copilot-agent-${Date.now()}.log`;
+  a.download = `archon-${Date.now()}.log`;
   a.click();
   URL.revokeObjectURL(url);
 });
@@ -1159,10 +1138,9 @@ $('refreshContainersBtn').addEventListener('click', () => {
 
 $('clearFormBtn').addEventListener('click', () => {
   if (!confirm('Clear all saved settings (tokens, keys, instructions)?')) return;
-  try { localStorage.removeItem(STORAGE_KEY); } catch (_) {}
   fetch('/api/config', { method: 'DELETE' }).catch(() => {});
-  [...GLOBAL_FIELDS, ...SESSION_FIELDS].forEach(id => { const el = $(id); if (el) el.value = ''; });
-  GLOBAL_CHECKBOXES.forEach(id => { const el = $(id); if (el) el.checked = false; });
+  ALL_FIELDS.forEach(id => { const el = $(id); if (el) el.value = ''; });
+  ALL_CHECKBOXES.forEach(id => { const el = $(id); if (el) el.checked = false; });
   $('useHostInstructions').checked = true;
   $('agent').value = 'copilot';
   updateAgentFields('copilot');
@@ -1331,7 +1309,7 @@ if (isElectron) {
 // ── Init ──────────────────────────────────────────────────────────────────────
 
 (async () => {
-  await loadForm();                          // fetch server config + localStorage
+  await loadForm();                          // fetch all config from server
   checkSetupHint();
   updateAgentFields($('agent').value);       // show/hide fields based on saved agent
   updateButtons();

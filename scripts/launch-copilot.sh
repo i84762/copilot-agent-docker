@@ -42,15 +42,21 @@ FIREBASE_STATUS=$([ "${FIREBASE_ENABLED:-false}" = "true" ] && echo "**ENABLED**
 cat > "$TASK_INSTRUCTIONS" << TASKINSTR
 # Agent Task Instructions
 
+## Purpose
+
+You are the **execution agent** in a fully automated development pipeline. A human planned this work, reviewed it, and approved it. There is **no human available** during execution. You must work continuously and autonomously until every goal is achieved. Do not stop. Do not ask questions. Do not wait.
+
 ## Behaviour Rules
 
-- Work **autonomously** — do not pause to ask for user confirmation.
-- **Never** delete the repository root (/workspace) or run destructive
-  commands such as \`rm -rf /workspace\` or \`git rm -r .\`.
+- Work **autonomously** — do not pause to ask for confirmation, clarification, or approval.
+- **Never** delete the repository root (/workspace) or run destructive commands such as \`rm -rf /workspace\` or \`git rm -r .\`.
 - Commit progress frequently with descriptive commit messages.
-- If you encounter an error, diagnose and fix it automatically.
-- Continue working until **all tasks below are fully complete**.
-- After completing each milestone, summarise what was done.
+- If you encounter an error: diagnose the root cause, fix it, and continue. Never give up on a milestone.
+- If you hit ambiguity: make the most reasonable choice, document it in a commit message, and keep going.
+- If a test fails: fix the failure before moving to the next milestone. Do not skip tests.
+- Continue until **ALL milestones are fully complete and their acceptance criteria are met**.
+- After each milestone: commit, then check off its acceptance criteria before moving on.
+- You are DONE only when every milestone is complete, all tests pass, and generate-report has run.
 
 ## Project Type
 
@@ -99,43 +105,62 @@ elif [ -f /workspace/PLAN.md ]; then
     PLAN_CONTENT=$(cat /workspace/PLAN.md)
     export INITIAL_PROMPT="## Your mission
 
-Execute the following plan **completely and autonomously** until every milestone is done.
+You are an autonomous execution agent. A human reviewed and approved the plan below. Execute it **completely and without stopping** until every milestone is done and every acceptance criterion is met.
 
-### Rules
-- Work through milestones **in order**. Do not skip any step.
-- Each milestone must meet its acceptance criteria before moving to the next.
-- Commit with a descriptive message after each milestone.
-- Run tests after every milestone. Fix failures before continuing.
-- **Do NOT stop to ask questions.** If you encounter ambiguity, make the best reasonable choice and note it in a commit message.
-- **Do NOT stop until ALL milestones are complete** and generate-report has been run.
+You are operating in a **fully automated pipeline** — there is no human to ask. Every decision is yours to make. Keep going.
+
+### Non-negotiable rules
+- Work through milestones **in order**. Do not skip any step or acceptance criterion.
+- Before moving to the next milestone, verify every acceptance criterion of the current one.
+- Commit with a descriptive message immediately after completing each milestone.
+- Run all tests after every milestone. Fix every failure before continuing — never leave a failing test.
+- **Never stop to ask questions.** If you hit ambiguity, make the most reasonable choice, note it in the commit message, and continue.
+- **Never stop working** until ALL milestones are complete, all tests pass, and generate-report has been run.
+- If you encounter an unexpected error or blocker: diagnose it, fix it, and continue. Do not give up.
 - When fully done: run \`generate-report\`, commit, and push.
+
+### Definition of DONE
+You are done when ALL of the following are true:
+1. Every milestone's acceptance criteria is checked off
+2. All tests pass (run the full test suite to confirm)
+3. \`generate-report\` has been run
+4. All changes are committed with descriptive messages
 
 ---
 
-## PLAN.md
+## Approved Plan
 
 ${PLAN_CONTENT}
 
 ---
 
-## Original Task (for context)
+## Original Task (for reference)
 
 ${TASK}
 
-Begin now with Milestone 1."
+---
+
+Begin now with Milestone 1. Do not stop until you reach the Definition of DONE."
     log "Using PLAN.md as execution driver"
 else
     # No plan — normal autonomous run
-    export INITIAL_PROMPT="## Task
+    export INITIAL_PROMPT="## Your mission
+
+You are an autonomous execution agent in a fully automated development pipeline. There is no human available during execution.
+
+Work **autonomously and continuously** until ALL goals below are fully implemented.
+
+### Rules
+- Do NOT stop to ask questions. Make reasonable decisions independently.
+- If you hit an error: diagnose and fix it. Never give up on a goal.
+- Commit progress frequently with descriptive messages.
+- Run tests after each significant change. Fix every failure before continuing.
+- You are DONE only when every goal is complete, all tests pass, and generate-report has run.
+- When done: run \`generate-report\`, commit, and push.
+
+## Task / Goals
 
 ${TASK}
-
-## Execution rules
-- Work **autonomously and continuously** until ALL goals are fully implemented.
-- Do NOT stop to ask questions. Make reasonable decisions independently.
-- Commit progress frequently with descriptive messages.
-- Run tests after each significant change. Fix failures before continuing.
-- When done: run \`generate-report\`, commit, and push.
 
 Begin now."
     log "No PLAN.md found — running in autonomous mode"

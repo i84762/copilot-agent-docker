@@ -131,7 +131,7 @@ function buildEnv(cfg, mode) {
     COPILOT_INSTRUCTIONS_FILE:    cfg.instructionsFile || 'copilot-instructions.md',
     COPILOT_INSTRUCTIONS_BRANCH:  cfg.instructionsBranch || 'main',
     COPILOT_USE_HOST_INSTRUCTIONS: (cfg.useHostInstructions !== false) ? 'true' : 'false',
-    GIT_USER_NAME:                cfg.gitUserName || 'Copilot Agent',
+    GIT_USER_NAME:                cfg.gitUserName || 'Archon',
     GIT_USER_EMAIL:               cfg.gitUserEmail || 'copilot@example.com',
     FLUTTER_VERSION:              cfg.flutterVersion || '3.24.5',
     GO_VERSION:                   cfg.goVersion || '1.22.5',
@@ -180,13 +180,13 @@ async function createContainer(cfg, mode) {
   const slug = (cfg.sessionName || '')
     .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
   const uniquePart = Date.now();
-  const dockerName = slug ? `copilot-${slug}-${uniquePart}` : `copilot-agent-${uniquePart}`;
+  const dockerName = slug ? `archon-${slug}-${uniquePart}` : `archon-${uniquePart}`;
 
   const interactive = mode === 'plan';
 
   return docker.createContainer({
     name: dockerName,
-    Image:        'copilot-agent:latest',
+    Image:        'archon:latest',
     AttachStdin:  interactive,
     AttachStdout: true,
     AttachStderr: true,
@@ -199,10 +199,10 @@ async function createContainer(cfg, mode) {
       AutoRemove: false,
     },
     Labels: {
-      'copilot-agent':        'true',
+      'archon':               'true',
       'copilot-mode':         mode,
       'copilot-project':      cfg.projectPath ? path.basename(cfg.projectPath) : 'unknown',
-      'copilot-agent-type':   cfg.agent || 'copilot',
+      'archon-agent-type':    cfg.agent || 'copilot',
       'copilot-session-name': cfg.sessionName || '',
     },
   });
@@ -227,7 +227,7 @@ function containerSummary(c) {
     state:       c.State,
     mode:        c.Labels?.['copilot-mode']    || 'normal',
     project:     c.Labels?.['copilot-project'] || '—',
-    agent:       c.Labels?.['copilot-agent-type'] || 'copilot',
+    agent:       c.Labels?.['archon-agent-type'] || 'copilot',
     image:       c.Image,
   };
 }
@@ -279,8 +279,8 @@ app.get('/api/containers', async (_req, res) => {
     const list   = await docker.listContainers({ all: true });
     const agents = list
       .filter(c =>
-        c.Labels?.['copilot-agent'] ||
-        c.Image.includes('copilot-agent') ||
+        c.Labels?.['archon'] ||
+        c.Image.includes('archon') ||
         c.Names.some(n => n.includes('copilot')))
       .map(containerSummary);
     res.json(agents);
@@ -305,7 +305,7 @@ app.post('/api/containers/:id/abort', async (req, res) => {
 
 app.get('/api/image/status', async (_req, res) => {
   try {
-    const info = await docker.getImage('copilot-agent:latest').inspect();
+    const info = await docker.getImage('archon:latest').inspect();
     res.json({ exists: true, id: info.Id.slice(7, 19), created: info.Created });
   } catch {
     res.json({ exists: false });
@@ -319,7 +319,7 @@ app.post('/api/image/build', async (_req, res) => {
   res.setHeader('X-Accel-Buffering', 'no'); // disable nginx buffering
 
   try {
-    const stream = await docker.buildImage(ROOT_DIR, { t: 'copilot-agent:latest' });
+    const stream = await docker.buildImage(ROOT_DIR, { t: 'archon:latest' });
 
     await new Promise((resolve, reject) => {
       stream.on('data', chunk => {
@@ -343,11 +343,17 @@ app.post('/api/image/build', async (_req, res) => {
 // ── WebSocket ─────────────────────────────────────────────────────────────────
 
 wss.on('connection', ws => {
+  const connId = Date.now();
+  console.log(`[ws] client connected (id=${connId})`);
+  ws.on('close',   () => console.log(`[ws] client disconnected (id=${connId})`));
+
   let logStream       = null;
   let containerStream = null; // plan mode interactive stream
   let activeId        = null;
-  // Dev logs are always streamed — client decides whether to show the panel
+  // Dev logs: streamed to client AND printed to server stdout for terminal visibility
   function devLog(text) {
+    const ts = new Date().toISOString().slice(11, 23);
+    process.stdout.write(`[${ts}] ${text}\n`);
     safeSend(ws, { type: 'dev_log', text });
   }
 
@@ -364,6 +370,7 @@ wss.on('connection', ws => {
   ws.on('message', async raw => {
     let msg;
     try { msg = JSON.parse(raw.toString()); } catch { return; }
+    console.log(`[ws] msg type=${msg.type} (id=${connId})`);
 
     switch (msg.type) {
 
@@ -427,11 +434,11 @@ wss.on('connection', ws => {
 
           step('image',     'Checking agent image',        'active');
           try {
-            const imgInfo = await docker.getImage('copilot-agent:latest').inspect();
+            const imgInfo = await docker.getImage('archon:latest').inspect();
             step('image',   'Image ready',                 'ok');
             devLog(`[image] id=${imgInfo.Id.slice(7,19)} created=${imgInfo.Created} size=${(imgInfo.Size/1024/1024).toFixed(1)}MB`);
           } catch {
-            throw new Error('Image copilot-agent:latest not found — build it first via "🔨 Build Image"');
+            throw new Error('Image archon:latest not found — build it first via "🔨 Build Image"');
           }
 
           step('create',    'Creating container',          'active');
@@ -505,8 +512,8 @@ wss.on('connection', ws => {
           stepP('docker',   'Docker connected',            'ok');
 
           stepP('image',    'Checking agent image',        'active');
-          try { await docker.getImage('copilot-agent:latest').inspect(); }
-          catch { throw new Error('Image copilot-agent:latest not found — build it first via "🔨 Build Image"'); }
+          try { await docker.getImage('archon:latest').inspect(); }
+          catch { throw new Error('Image archon:latest not found — build it first via "🔨 Build Image"'); }
           stepP('image',    'Image ready',                 'ok');
 
           // ── CRITICAL: attach BEFORE start so we capture all output ──────────
@@ -515,21 +522,35 @@ wss.on('connection', ws => {
           activeId = container.id;
           devLog(`[plan] containerId=${container.id}`);
 
+          // Declare planAgent early — needed by the stream handler below
+          const planAgent = (msg.config?.agent || 'copilot').toLowerCase();
+
           stepP('attach',   'Attaching interactive PTY',   'active');
           containerStream = await container.attach({
             stream: true, stdin: true, stdout: true, stderr: true, hijack: true,
           });
           devLog(`[plan] PTY attached — starting container`);
 
-          // ── Chat protocol: strip ANSI, stream chunks, debounce message end ──
+          // ── Stream routing: TUI agents → xterm (raw bytes); text agents → chat ─
+          // copilot uses a TUI that must be rendered in xterm.js.
+          // claude/gemini output plain text that renders well as chat bubbles.
+          const isTuiAgent = (planAgent === 'copilot' || planAgent === 'aider');
+
           let agentTyping    = false;
           let chatDebounce   = null;
           const DEBOUNCE_MS  = 1500;
 
           containerStream.on('data', chunk => {
-            const raw = chunk.toString('utf8');
             devLog(`[plan stream] ${chunk.length}b`);
 
+            if (isTuiAgent) {
+              // Forward raw bytes to xterm.js terminal in the browser
+              safeSend(ws, { type: 'plan_raw', data: chunk.toString('base64') });
+              return;
+            }
+
+            // Text-based agents: strip ANSI and send as chat bubbles
+            const raw = chunk.toString('utf8');
             const text = stripAnsi(raw);
             if (!text) return;
 
@@ -549,9 +570,24 @@ wss.on('connection', ws => {
             }, DEBOUNCE_MS);
           });
 
-          containerStream.on('end', () => {
+          containerStream.on('end', async () => {
             devLog(`[plan] stream ended for ${container.id}`);
             if (chatDebounce) clearTimeout(chatDebounce);
+
+            // Fetch container exit code to surface in logs
+            try {
+              const info = await container.inspect();
+              const exitCode = info.State?.ExitCode;
+              devLog(`[plan] container exit code: ${exitCode}`);
+              if (exitCode !== 0) {
+                // Fetch last lines of docker logs for diagnosis
+                const rawLogs = await container.logs({ stdout: true, stderr: true, tail: 30 });
+                const lastLines = rawLogs.toString('utf8').replace(/[\x00-\x08\x0e-\x1f\x7f]/g, '').trim();
+                devLog(`[plan] container last logs:\n${lastLines}`);
+                safeSend(ws, { type: 'chat_system', text: `⚠️ Container exited with code ${exitCode}. Check Dev Logs for details.` });
+              }
+            } catch (e) { devLog(`[plan] inspect after exit failed: ${e.message}`); }
+
             safeSend(ws, { type: 'chat_message_end' });
             safeSend(ws, { type: 'chat_system', text: '📋 Planning session ended — click Execute Plan to run.' });
             safeSend(ws, { type: 'container_stopped', containerId: container.id });
@@ -565,7 +601,6 @@ wss.on('connection', ws => {
           stepP('attach',   'Interactive session ready',   'ok');
 
           // ── Auto-setup: grant permissions then send initial planning message ─
-          const planAgent    = (msg.config?.agent    || 'copilot').toLowerCase();
           const planTask     = (msg.config?.task     || '').trim();
           const planTaskFile = (msg.config?.taskFile || '').trim();
 
@@ -581,19 +616,45 @@ wss.on('connection', ws => {
           if (!taskBlock) taskBlock = '## Task\n\n(No task provided — please ask the user what they want to build.)\n\n';
 
           const INITIAL_PLAN_MSG = taskBlock +
-            '## Begin now\n\n' +
-            'Start your deep exploration immediately before asking me anything:\n' +
-            '1. Explore the full codebase structure and architecture\n' +
-            '2. Read all requirement/task/spec documents found in /workspace\n' +
-            '3. Check git history, existing patterns, key components\n' +
-            '4. Then return ONE structured analysis covering:\n' +
-            '   - Project overview (tech stack, architecture, key files)\n' +
-            '   - Your understanding of the requirements\n' +
-            '   - ALL gaps, ambiguities, missing information (numbered list)\n' +
-            '   - Technical risks and concerns\n' +
-            '   - Suggestions and improvements you would recommend\n' +
-            '   - Numbered clarifying questions I must answer before you write the plan\n\n' +
-            'Do NOT write code. Do NOT write PLAN.md yet. Explore first.';
+            '## Your mission\n\n' +
+            'You are the planning agent in a **fully automated development pipeline**. ' +
+            'After this planning session, a separate AI agent will receive PLAN.md as its only input ' +
+            'and execute every milestone **completely autonomously** — no humans, no clarification, no stopping. ' +
+            'The plan you write is the sole source of truth. Make it thorough.\n\n' +
+            '## Begin: deep exploration first\n\n' +
+            'Before writing a single word of your response, run ALL of these:\n' +
+            '- `find /workspace -type f | grep -v \'.git\\|node_modules\\|.dart_tool\\|build\\|.pub-cache\' | sort | head -150`\n' +
+            '- Read the project manifest (pubspec.yaml / package.json / go.mod / Cargo.toml / pom.xml)\n' +
+            '- Read entry points, core architecture files, state management, routing\n' +
+            '- Read EVERY requirements/spec/task document in /workspace\n' +
+            '- `git -C /workspace log --oneline -30` — understand recent history\n' +
+            '- `find /workspace -name \'*_test*\' -o -name \'*.test.*\' -o -name \'*.spec.*\' | grep -v node_modules | head -30`\n\n' +
+            '## Then return ONE structured analysis with ALL these sections:\n\n' +
+            '1. **Project Overview** — stack, architecture, key components, current state\n' +
+            '2. **Requirements Analysis** — what you understood + mapping to affected code\n' +
+            '3. **Gaps & Ambiguities** — numbered, exhaustive — every unclear or underspecified requirement\n' +
+            '4. **Technical Risks** — breaking changes, conflicts, constraints from existing patterns\n' +
+            '5. **Suggestions** — better approaches, simplifications, scope recommendations\n' +
+            '6. **Clarifying Questions** — numbered — every answer that would meaningfully change the plan\n\n' +
+            'Do NOT write code. Do NOT write PLAN.md yet. Deliver the analysis only.\n' +
+            'I will answer your questions, then you write the plan.';
+
+          // Write the initial planning brief to a file in the container so we can
+          // send a single-line prompt to the agent PTY (multiline stdin writes
+          // send multiple Enter keypresses, confusing TUI apps like copilot).
+          const writeBrief = async () => {
+            try {
+              const exec = await container.exec({
+                Cmd: ['bash', '-c', `cat > /workspace/.planning-brief.md << 'BRIEFEOF'\n${INITIAL_PLAN_MSG}\nBRIEFEOF`],
+                AttachStdout: true, AttachStderr: true,
+              });
+              const s = await exec.start({ hijack: true, stdin: false });
+              await new Promise(r => s.on('end', r));
+              devLog('[plan auto-setup] planning brief written to /workspace/.planning-brief.md');
+            } catch (e) {
+              devLog(`[plan auto-setup] brief write failed: ${e.message}`);
+            }
+          };
 
           if (planAgent === 'copilot') {
             setTimeout(() => {
@@ -602,18 +663,27 @@ wss.on('connection', ws => {
                 containerStream.write(Buffer.from('/allow-all\n'));
               }
             }, 10000);
-            setTimeout(() => {
+            setTimeout(async () => {
+              await writeBrief();
               if (containerStream) {
-                devLog('[plan auto-setup] sending initial planning message');
-                containerStream.write(Buffer.from(INITIAL_PLAN_MSG + '\n'));
+                devLog('[plan auto-setup] sending initial planning message (single-line trigger)');
+                containerStream.write(Buffer.from(
+                  'Please read /workspace/.planning-brief.md and follow all instructions in it exactly. ' +
+                  'Start by running the exploration commands listed there before writing your first response.\n'
+                ));
               }
             }, 13000);
           } else {
+            // claude/gemini/aider: write brief then send single-line trigger
             const delay = planAgent === 'claude' ? 4000 : 5000;
-            setTimeout(() => {
+            setTimeout(async () => {
+              await writeBrief();
               if (containerStream) {
-                devLog('[plan auto-setup] sending initial planning message');
-                containerStream.write(Buffer.from(INITIAL_PLAN_MSG + '\n'));
+                devLog('[plan auto-setup] sending initial planning message (single-line trigger)');
+                containerStream.write(Buffer.from(
+                  'Please read /workspace/.planning-brief.md and follow all instructions in it exactly. ' +
+                  'Start by running the exploration commands listed there before writing your first response.\n'
+                ));
               }
             }, delay);
           }
@@ -739,7 +809,7 @@ async function watchDockerEvents() {
       try {
         const ev        = JSON.parse(chunk.toString());
         const attrs     = ev.Actor?.Attributes || {};
-        const isCopilot = attrs['copilot-agent'] || (attrs.image || '').includes('copilot-agent');
+        const isCopilot = attrs['archon'] || (attrs.image || '').includes('archon');
         if (isCopilot) {
           broadcast({
             type:        'docker_event',
@@ -768,7 +838,7 @@ function toB64(str) { return Buffer.from(str).toString('base64'); }
 // ── Start ─────────────────────────────────────────────────────────────────────
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`\n🤖  Copilot Agent UI`);
+  console.log(`\n🤖  Archon`);
   console.log(`    Local:  http://localhost:${PORT}`);
   console.log(`    Remote: ssh -L ${PORT}:localhost:${PORT} user@host  →  http://localhost:${PORT}\n`);
   watchDockerEvents();

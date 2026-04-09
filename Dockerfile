@@ -4,17 +4,21 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=UTC
 ENV PATH="/root/.local/bin:/sdks/flutter/bin:/usr/local/go/bin:/root/.cargo/bin:${PATH}"
 
-# Base system tools
+# Base system tools (without nodejs — we install Node.js 20 LTS below)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl wget git unzip zip xz-utils \
     python3 python3-pip \
     openjdk-17-jdk-headless \
-    nodejs npm \
     tmux expect \
     ca-certificates gnupg lsb-release \
     libglu1-mesa clang cmake ninja-build pkg-config \
     libgtk-3-dev liblzma-dev libstdc++-12-dev \
     build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js 20 LTS via NodeSource (required by claude-code and gemini-cli)
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Copilot CLI
@@ -86,5 +90,12 @@ RUN chmod +x \
     /usr/local/bin/agents/claude.sh \
     /usr/local/bin/agents/gemini.sh \
     /usr/local/bin/agents/aider.sh
+
+# Create a non-root user used ONLY for running the claude/gemini binaries.
+# Claude Code blocks --dangerously-skip-permissions for UID 0, so we drop
+# privileges with `runuser -u agent` just before launching the agent binary.
+# The rest of the container (setup, git, session-state) keeps running as root.
+RUN groupadd -g 1000 agent \
+    && useradd -u 1000 -g 1000 -s /bin/bash -d /root agent
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

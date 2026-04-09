@@ -1,7 +1,7 @@
 {
-  "name": "copilot-agent-ui",
+  "name": "archon",
   "version": "1.0.0",
-  "description": "Web UI for GitHub Copilot Agent Docker",
+  "description": "Archon — AI agent orchestrator for automated software development",
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",

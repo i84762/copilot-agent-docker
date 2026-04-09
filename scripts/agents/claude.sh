@@ -44,8 +44,8 @@ if [ "${CLAUDE_INTERACTIVE:-false}" != "true" ]; then
     log "Running Claude Code in autonomous mode (--print)..."
     print_banner "Claude Code (autonomous)" "$MODE"
 
-    # claude -p runs non-interactively; --dangerously-skip-permissions skips all prompts
-    claude -p "$INITIAL_PROMPT" \
+    # Drop to non-root (agent/UID 1000) — claude blocks --dangerously-skip-permissions as root
+    runuser -u agent -- claude -p "$INITIAL_PROMPT" \
         --dangerously-skip-permissions \
         --allowedTools "all"
     EXIT_CODE=$?
@@ -60,7 +60,7 @@ tmux kill-session -t "$TMUX_SESSION" 2>/dev/null || true
 tmux new-session -d -s "$TMUX_SESSION" -x 240 -y 50
 
 tmux send-keys -t "$TMUX_SESSION" \
-    "export ANTHROPIC_API_KEY='${ANTHROPIC_API_KEY}'; cd /workspace && claude --dangerously-skip-permissions" Enter
+    "export ANTHROPIC_API_KEY='${ANTHROPIC_API_KEY}'; cd /workspace && runuser -u agent -- claude --dangerously-skip-permissions" Enter
 sleep 5
 
 # Submit initial prompt

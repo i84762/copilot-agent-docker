@@ -23,7 +23,7 @@ function startServer() {
     serverProcess.stdout.on('data', d => {
       const msg = d.toString();
       process.stdout.write(msg);
-      if (msg.includes('Copilot Agent UI')) resolve();
+      if (msg.includes('Archon')) resolve();
     });
 
     serverProcess.stderr.on('data', d => process.stderr.write(d.toString()));
@@ -53,7 +53,7 @@ function createWindow() {
     height: 820,
     minWidth: 900,
     minHeight: 600,
-    title: 'Copilot Agent',
+    title: 'Archon',
     icon: path.join(__dirname, 'icon.png'),
     backgroundColor: '#0d1117',
     webPreferences: {

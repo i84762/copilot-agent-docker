@@ -1,5 +1,5 @@
-appId: com.copilot.agent.docker
-productName: Copilot Agent
+appId: com.archon.agent
+productName: Archon
 copyright: "Copyright © 2024"
 
 directories:
@@ -22,7 +22,7 @@ win:
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
-  shortcutName: Copilot Agent
+  shortcutName: Archon
 
 # macOS — DMG
 mac:
