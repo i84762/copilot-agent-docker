@@ -403,7 +403,17 @@ async function fetchCopilotModels(token) {
     return m ? m[1] : raw;
   }
 
+  // Only keep chat/completion models — exclude embeddings, image-gen, etc.
+  const CHAT_TASK_TYPES = ['chat-completion', 'text-generation', 'conversational'];
   return list
+    .filter(m => {
+      const tasks = m.supported_tasks || m.task_types || m.capabilities?.tasks || [];
+      // If the API provides task info, use it; otherwise fall back to name heuristics
+      if (tasks.length) return tasks.some(t => CHAT_TASK_TYPES.includes(typeof t === 'string' ? t : t.task_type || t.id || t));
+      // Heuristic: exclude known non-chat model name patterns
+      const rawId = (m.id || m.name || '').toLowerCase();
+      return !rawId.includes('embed') && !rawId.includes('whisper') && !rawId.includes('tts') && !rawId.includes('dall-e') && !rawId.includes('image');
+    })
     .map(m => {
       const id = shortId(m.id || m.name);
       const name = m.friendly_name || m.display_name || id;
