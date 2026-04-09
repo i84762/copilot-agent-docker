@@ -100,36 +100,34 @@ function connectWS() {
         break;
       }
 
-      // ── TUI agents (copilot/aider): raw PTY bytes → xterm ────────────────
-      case 'plan_raw': {
-        const raw = Uint8Array.from(atob(msg.data), c => c.charCodeAt(0));
-        term.write(raw);
-        // First time: switch from chat view to terminal view (TUI agent)
-        if ($('terminal').classList.contains('hidden')) {
-          $('terminal').classList.remove('hidden');
-          $('chatPanel').classList.add('hidden');
-          termInputEnabled = true; // enable keyboard passthrough to container
-          fitAddon.fit();
-        }
-        break;
-      }
 
       // ── Chat UI events (plan mode) ─────────────────────────────────────────
+      // All agents (including copilot/aider) output is routed through chat.
+      // During streaming: append raw text for low-latency display.
+      // On message_end: re-render the completed bubble as markdown.
+
       case 'chat_chunk': {
         hideChatTyping();
         let bubble = document.getElementById('currentAgentBubble');
         if (!bubble) {
-          bubble = appendChatBubble('agent');
+          bubble = appendChatBubble('agent', '');
           bubble.id = 'currentAgentBubble';
         }
+        // Accumulate on the element itself for final markdown render
+        bubble._rawText = (bubble._rawText || '') + msg.text;
+        // Stream as pre-text for immediate feedback
         const textEl = bubble.querySelector('.bubble-text');
-        textEl.textContent += msg.text;
+        textEl.textContent = bubble._rawText;
         scrollChatToBottom();
         break;
       }
 
       case 'chat_message_end': {
         const bubble = document.getElementById('currentAgentBubble');
+        if (bubble && bubble._rawText) {
+          // Render accumulated text as markdown
+          renderBubbleMarkdown(bubble);
+        }
         if (bubble) bubble.removeAttribute('id');
         hideChatTyping();
         scrollChatToBottom();
@@ -736,6 +734,24 @@ function appendChatBubble(type, text = '') {
   wrap.appendChild(textEl);
   messages.appendChild(wrap);
   return wrap;
+}
+
+/**
+ * Replace the streaming <pre> text in an agent bubble with rendered markdown.
+ * Called once per agent message when chat_message_end arrives.
+ */
+function renderBubbleMarkdown(bubble) {
+  const textEl = bubble.querySelector('.bubble-text');
+  if (!textEl || !bubble._rawText) return;
+  try {
+    const html = marked.parse(bubble._rawText, { breaks: true, gfm: true });
+    const div = document.createElement('div');
+    div.className = 'bubble-markdown';
+    div.innerHTML = html;
+    textEl.replaceWith(div);
+  } catch (_) {
+    // keep plain text if marked fails
+  }
 }
 
 function scrollChatToBottom() {

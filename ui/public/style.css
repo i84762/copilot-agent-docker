@@ -431,7 +431,7 @@ select.input-field { cursor: pointer; appearance: none; background-image: url("d
 }
 
 .chat-bubble {
-  max-width: 82%;
+  max-width: 90%;
   border-radius: var(--radius);
   padding: 10px 14px;
   line-height: 1.55;
@@ -470,6 +470,52 @@ select.input-field { cursor: pointer; appearance: none; background-image: url("d
   white-space: pre-wrap;
   margin: 0;
 }
+
+/* Markdown-rendered agent bubble — replaces <pre> after message completes */
+.bubble-markdown {
+  font-size: 13px;
+  line-height: 1.6;
+}
+.bubble-markdown p  { margin: 0 0 8px; }
+.bubble-markdown p:last-child { margin-bottom: 0; }
+.bubble-markdown h1, .bubble-markdown h2, .bubble-markdown h3,
+.bubble-markdown h4 { margin: 12px 0 6px; font-weight: 600; }
+.bubble-markdown h1 { font-size: 1.2em; }
+.bubble-markdown h2 { font-size: 1.1em; }
+.bubble-markdown h3, .bubble-markdown h4 { font-size: 1em; }
+.bubble-markdown ul, .bubble-markdown ol { margin: 4px 0 8px 20px; padding: 0; }
+.bubble-markdown li { margin: 2px 0; }
+.bubble-markdown code {
+  background: rgba(255,255,255,.08);
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-size: 12px;
+}
+.bubble-markdown pre {
+  background: rgba(0,0,0,.35);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  overflow-x: auto;
+  margin: 6px 0;
+}
+.bubble-markdown pre code {
+  background: none;
+  padding: 0;
+  font-size: 12px;
+}
+.bubble-markdown blockquote {
+  border-left: 3px solid var(--border2);
+  margin: 6px 0;
+  padding-left: 12px;
+  color: var(--text-muted);
+}
+.bubble-markdown strong { font-weight: 600; }
+.bubble-markdown em { font-style: italic; }
+.bubble-markdown hr { border: none; border-top: 1px solid var(--border); margin: 10px 0; }
+.bubble-markdown a { color: var(--blue); text-decoration: none; }
+.bubble-markdown a:hover { text-decoration: underline; }
 
 /* Typing indicator */
 .chat-typing {

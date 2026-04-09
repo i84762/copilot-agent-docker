@@ -81,11 +81,12 @@ function writeServerConfig(data) {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /**
- * Strip ANSI/VT escape sequences from a string so agent output
- * can be displayed in the chat UI as plain text.
+ * Strip ANSI/VT escape sequences and handle TUI overwrite patterns so that
+ * output from any agent (including TUI apps like copilot/aider) is rendered
+ * as clean readable text in the chat UI.
  */
 function stripAnsi(str) {
-  return str
+  let s = str
     // CSI sequences: ESC [ ... (final byte A-Za-z ~)
     .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '')
     // OSC sequences: ESC ] ... ST (BEL or ESC \)
@@ -98,6 +99,28 @@ function stripAnsi(str) {
     .replace(/\x1b/g, '')
     // Non-printable control chars (keep \t \n \r)
     .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
+
+  // Handle TUI overwrite pattern: \r without \n means "rewrite current line".
+  // Split on \n, then for each line apply the \r overwrite semantic so we keep
+  // only the last segment (the final content the TUI rendered on that line).
+  s = s.split('\n').map(line => {
+    const parts = line.split('\r');
+    // Last non-empty segment wins (TUI rewrites line by returning to col 0)
+    for (let i = parts.length - 1; i >= 0; i--) {
+      if (parts[i].trim()) return parts[i];
+    }
+    return '';
+  }).join('\n');
+
+  // Remove lines that are only spinner/progress characters
+  s = s.split('\n')
+    .filter(line => !/^[\s⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏|/\\—\-\.]+$/.test(line))
+    .join('\n');
+
+  // Collapse 3+ consecutive blank lines into 2
+  s = s.replace(/\n{3,}/g, '\n\n');
+
+  return s.trim();
 }
 
 function safeSend(ws, obj) {
@@ -531,27 +554,19 @@ wss.on('connection', ws => {
           });
           devLog(`[plan] PTY attached — starting container`);
 
-          // ── Stream routing: TUI agents → xterm (raw bytes); text agents → chat ─
-          // copilot uses a TUI that must be rendered in xterm.js.
-          // claude/gemini output plain text that renders well as chat bubbles.
-          const isTuiAgent = (planAgent === 'copilot' || planAgent === 'aider');
-
+          // ── All agents → chat UI (ANSI stripped, debounced bubbles) ──────────
+          // Every agent — including TUI apps like copilot and aider — is routed
+          // through the chat UI. ANSI/TUI escape sequences are stripped server-side
+          // so the user always sees clean text bubbles, never a raw terminal.
           let agentTyping    = false;
           let chatDebounce   = null;
           const DEBOUNCE_MS  = 1500;
 
           containerStream.on('data', chunk => {
-            devLog(`[plan stream] ${chunk.length}b`);
-
-            if (isTuiAgent) {
-              // Forward raw bytes to xterm.js terminal in the browser
-              safeSend(ws, { type: 'plan_raw', data: chunk.toString('base64') });
-              return;
-            }
-
-            // Text-based agents: strip ANSI and send as chat bubbles
-            const raw = chunk.toString('utf8');
+            const rawBytes = chunk.length;
+            const raw  = chunk.toString('utf8');
             const text = stripAnsi(raw);
+            devLog(`[plan stream] ${rawBytes}b → ${text.length}ch visible`);
             if (!text) return;
 
             // Signal typing indicator on first chunk of a new message
@@ -562,7 +577,7 @@ wss.on('connection', ws => {
 
             safeSend(ws, { type: 'chat_chunk', text });
 
-            // Debounce: treat silence as end of agent response
+            // Debounce: silence longer than DEBOUNCE_MS → end of agent response
             if (chatDebounce) clearTimeout(chatDebounce);
             chatDebounce = setTimeout(() => {
               agentTyping = false;
