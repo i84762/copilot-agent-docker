@@ -543,22 +543,22 @@ select.input-field { cursor: pointer; appearance: none; background-image: url("d
 /* ── "Next Phase" floating button ─────────────────────────────────────────── */
 .next-phase-btn {
   position: absolute;
-  bottom: 108px;   /* above the chat input area */
+  bottom: 108px;
   right: 16px;
   z-index: 20;
-  background: rgba(255,255,255,0.04);
-  color: var(--text-muted);
-  border: 1px solid var(--border);
+  background: rgba(31,111,235,0.15);
+  color: var(--blue);
+  border: 1px solid rgba(31,111,235,0.4);
   border-radius: 14px;
   padding: 6px 14px;
   font-size: 11px;
-  font-weight: 400;
+  font-weight: 500;
   cursor: pointer;
   white-space: nowrap;
   transition: opacity .15s, color .15s, border-color .15s, background .15s;
-  opacity: .75;
+  opacity: .85;
 }
-.next-phase-btn:hover  { opacity: 1; color: var(--text); border-color: var(--text-dim); background: rgba(255,255,255,0.08); }
+.next-phase-btn:hover  { opacity: 1; background: rgba(31,111,235,0.28); border-color: var(--blue); }
 .next-phase-btn:active { opacity: .8; }
 .next-phase-btn:disabled { opacity: .3; cursor: not-allowed; }
 .next-phase-btn.hidden { display: none; }
