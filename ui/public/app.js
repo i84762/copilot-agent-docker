@@ -333,6 +333,9 @@ function enterState(newState) {
     const title = $('terminalTitle');
     if (title) title.textContent = 'Idle';
     hidePlanStepper();
+  }
+  // Only hide quota badge when truly idle (no active session)
+  if (newState === 'idle') {
     updateQuotaBadge(null, null, null);
   }
   // Always clear any lingering progress overlay when switching state
