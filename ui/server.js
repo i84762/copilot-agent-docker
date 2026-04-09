@@ -618,7 +618,43 @@ wss.on('connection', ws => {
           });
           containerStream.on('error', err => devLog(`[plan stream error] ${err.message}`));
 
-          // NOW start — all output goes directly to our attached stream
+          // ── Watch copilot log file for auth errors (surfaced to chat UI) ──────
+          // Copilot logs errors to a process log file but never to stdout/PTY.
+          // Poll the log dir and tail the newest log file to catch auth failures.
+          if (planAgent === 'copilot') {
+            const logPollTimer = setInterval(async () => {
+              try {
+                const exec = await container.exec({
+                  Cmd: ['bash', '-c',
+                    'f=$(ls -t /workspace/.copilot-session/copilot-home/logs/process-*.log 2>/dev/null | head -1); ' +
+                    '[ -f "$f" ] && grep -E "ERROR|Logged out|not supported|unauthorized|unauthenticated" "$f" | tail -5'],
+                  AttachStdout: true, AttachStderr: false,
+                });
+                const s = await exec.start({ hijack: false, stdin: false });
+                let out = '';
+                s.on('data', d => { out += d.toString('utf8').replace(/[\x00-\x08]/g, ''); });
+                s.on('end', () => {
+                  if (!out.trim()) return;
+                  if (out.includes('Classic PATs are not supported')) {
+                    clearInterval(logPollTimer);
+                    safeSend(ws, { type: 'chat_system',
+                      text: '❌ **Authentication failed:** Your GitHub token is a Classic PAT, which Copilot CLI v1.0.21 no longer supports.\n\n' +
+                            '**Fix options:**\n' +
+                            '1. Switch to the **Claude** agent (recommended — no GitHub auth needed, add ANTHROPIC_API_KEY)\n' +
+                            '2. Generate a **fine-grained PAT** at github.com/settings/tokens?type=beta and update your GH_TOKEN' });
+                  } else if (out.includes('Logged out') || out.includes('unauthorized') || out.includes('unauthenticated')) {
+                    clearInterval(logPollTimer);
+                    safeSend(ws, { type: 'chat_system',
+                      text: '❌ **Copilot authentication failed.** Check your GH_TOKEN and ensure it has Copilot access. Check Dev Logs for details.' });
+                    devLog(`[plan auth-check] errors found:\n${out.trim()}`);
+                  }
+                });
+              } catch (_) { /* container may have exited */ clearInterval(logPollTimer); }
+            }, 5000);
+            // Stop polling once agentReady (message sent) + 60s
+            setTimeout(() => clearInterval(logPollTimer), 90000);
+          }
+
           await container.start();
           stepP('create',   'Container started',           'ok');
           stepP('attach',   'Interactive session ready',   'ok');
