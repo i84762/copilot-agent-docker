@@ -644,6 +644,7 @@ async function sendPlanMessage(sessionId, userText, onChunk, onDone, onError, on
   // Trim conversation to fit within model context limits.
   // Always keeps system messages; drops oldest non-system messages first.
   // Rough estimate: 4 chars ≈ 1 token.
+  const agent = sess.agent;
   const TOKEN_BUDGETS = { copilot: 5500, aider: 5500, claude: 80000, gemini: 80000 };
   const charBudget = (TOKEN_BUDGETS[agent] || 5500) * 4;
 
@@ -666,7 +667,6 @@ async function sendPlanMessage(sessionId, userText, onChunk, onDone, onError, on
     return [...system, ...kept];
   }
 
-  const agent = sess.agent;
   if (agent === 'copilot') {
     await streamCopilot(trimmedMessages(), sess.config, accChunk, accDone, onError);
   } else if (agent === 'claude') {
