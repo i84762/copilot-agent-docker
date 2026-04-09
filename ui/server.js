@@ -771,15 +771,19 @@ wss.on('connection', ws => {
         devLog(`[docker] config=${JSON.stringify(dockerCfg)}`);
         if (activeId) {
           devLog(`[active container] ${activeId}`);
-          try {
-            const info = await docker.getContainer(activeId).inspect();
-            devLog(`[inspect] name=${info.Name} state=${info.State?.Status}`);
-            devLog(`[inspect] started=${info.State?.StartedAt} pid=${info.State?.Pid}`);
-            const envLines = (info.Config?.Env || [])
-              .map(e => e.startsWith('GH_TOKEN') || e.includes('API_KEY') || e.includes('KEY=')
-                ? e.replace(/=(.{4}).*/, '=****') : e);
-            devLog(`[inspect] env:\n  ${envLines.join('\n  ')}`);
-          } catch (e) { devLog(`[inspect] ${e.message}`); }
+          if (activeId.startsWith('plan-api-')) {
+            devLog('[inspect] virtual API session (no Docker container)');
+          } else {
+            try {
+              const info = await docker.getContainer(activeId).inspect();
+              devLog(`[inspect] name=${info.Name} state=${info.State?.Status}`);
+              devLog(`[inspect] started=${info.State?.StartedAt} pid=${info.State?.Pid}`);
+              const envLines = (info.Config?.Env || [])
+                .map(e => e.startsWith('GH_TOKEN') || e.includes('API_KEY') || e.includes('KEY=')
+                  ? e.replace(/=(.{4}).*/, '=****') : e);
+              devLog(`[inspect] env:\n  ${envLines.join('\n  ')}`);
+            } catch (e) { devLog(`[inspect] ${e.message}`); }
+          }
         } else {
           devLog('[active container] none');
         }

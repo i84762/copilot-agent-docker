@@ -205,9 +205,11 @@ function connectWS() {
       case 'containers_list':
         renderContainerList(msg.containers);
         // Auto-recover: if we think a container is active but it's gone, reset to idle.
-        // Skip the check for 5s after container_started to avoid a race where the
-        // docker_event 'start' triggers a list refresh before the container appears.
-        if (activeContainerId && state !== 'idle' && (Date.now() - containerStartedAt) > 5000) {
+        // Skip for virtual API session IDs (plan-api-*) — they have no Docker container.
+        // Skip for 5s after container_started to avoid a race where the docker_event
+        // 'start' triggers a list refresh before the container appears.
+        if (activeContainerId && !activeContainerId.startsWith('plan-api-') &&
+            state !== 'idle' && (Date.now() - containerStartedAt) > 5000) {
           const stillExists = msg.containers && msg.containers.some(c => c.id === activeContainerId);
           if (!stillExists) {
             activeContainerId = null;
