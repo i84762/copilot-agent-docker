@@ -400,6 +400,7 @@ select.input-field { cursor: pointer; appearance: none; background-image: url("d
   flex-direction: column;
   overflow: hidden;
   background: var(--bg);
+  position: relative;  /* anchor for next-phase-btn */
 }
 
 /* ── Resume plan prompt ─────────────────────────────────────────────────────── */
@@ -542,8 +543,8 @@ select.input-field { cursor: pointer; appearance: none; background-image: url("d
 /* ── "Next Phase" floating button ─────────────────────────────────────────── */
 .next-phase-btn {
   position: absolute;
-  bottom: 10px;
-  right: 38px;   /* clear of plan stepper */
+  bottom: 96px;   /* above the chat input area */
+  right: 38px;    /* clear of plan stepper */
   z-index: 20;
   background: transparent;
   color: var(--text-dim);
@@ -693,7 +694,6 @@ select.input-field { cursor: pointer; appearance: none; background-image: url("d
   flex-direction: column;
   gap: 12px;
   scroll-behavior: smooth;
-  position: relative;  /* anchor for next-phase-btn */
 }
 
 .chat-bubble {
