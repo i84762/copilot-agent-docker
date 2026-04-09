@@ -108,10 +108,13 @@
         <!-- Agent info card -->
         <div id="agentCard" class="agent-card"></div>
 
+        <!-- Hidden dummy username suppresses browser "save password" prompt -->
+        <input type="text" style="display:none" autocomplete="username" aria-hidden="true">
+
         <!-- Copilot: GH Token -->
         <div id="agentFields-copilot" class="agent-fields">
           <label class="field-label">GitHub Token <span class="required">*</span></label>
-          <input id="ghToken" type="password" class="input-field" placeholder="github_pat_…" autocomplete="off">
+          <input id="ghToken" type="password" class="input-field" placeholder="github_pat_…" autocomplete="new-password">
           <div class="field-help token-warning">
             ⚠️ <strong>Must be a fine-grained PAT</strong> — Classic PATs (<code>ghp_…</code>) are rejected by Copilot CLI v1.0.21+.<br>
             Required permissions: <strong>Models</strong> (read) · <strong>Repositories</strong> (read) · <strong>User</strong> (read)<br>
@@ -130,7 +133,7 @@
         <!-- Claude: Anthropic API Key -->
         <div id="agentFields-claude" class="agent-fields" style="display:none">
           <label class="field-label">Anthropic API Key <span class="required">*</span></label>
-          <input id="anthropicApiKey" type="password" class="input-field" placeholder="sk-ant-…" autocomplete="off">
+          <input id="anthropicApiKey" type="password" class="input-field" placeholder="sk-ant-…" autocomplete="new-password">
           <p class="field-help">
             API key from Anthropic Console.
             <a href="https://console.anthropic.com/settings/keys" target="_blank" class="help-link">Get key ↗</a>
@@ -147,7 +150,7 @@
         <!-- Gemini: Google API Key -->
         <div id="agentFields-gemini" class="agent-fields" style="display:none">
           <label class="field-label">Gemini API Key <span class="required">*</span></label>
-          <input id="geminiApiKey" type="password" class="input-field" placeholder="AIza…" autocomplete="off">
+          <input id="geminiApiKey" type="password" class="input-field" placeholder="AIza…" autocomplete="new-password">
           <p class="field-help">
             API key from Google AI Studio.
             <a href="https://aistudio.google.com/app/apikey" target="_blank" class="help-link">Get key ↗</a>
@@ -165,11 +168,11 @@
         <div id="agentFields-aider" class="agent-fields" style="display:none">
           <p class="field-help" style="margin-top:2px">Provide at least one API key. Model is auto-detected.</p>
           <label class="field-label">OpenAI API Key</label>
-          <input id="openaiApiKey" type="password" class="input-field" placeholder="sk-…" autocomplete="off">
+          <input id="openaiApiKey" type="password" class="input-field" placeholder="sk-…" autocomplete="new-password">
           <label class="field-label">Anthropic API Key</label>
-          <input id="anthropicApiKey2" type="password" class="input-field" placeholder="sk-ant-…" autocomplete="off">
+          <input id="anthropicApiKey2" type="password" class="input-field" placeholder="sk-ant-…" autocomplete="new-password">
           <label class="field-label">Gemini API Key</label>
-          <input id="geminiApiKey2" type="password" class="input-field" placeholder="AIza…" autocomplete="off">
+          <input id="geminiApiKey2" type="password" class="input-field" placeholder="AIza…" autocomplete="new-password">
           <label class="field-label">Model override <span class="field-optional">(optional)</span></label>
           <input id="aiderModel" type="text" class="input-field" placeholder="gpt-4o · claude-3-5-sonnet-20241022 · gemini/gemini-1.5-pro">
           <p class="field-help">
@@ -365,7 +368,7 @@
       <label class="field-label">SSH Key File</label>
       <input id="sshKeyPath" type="text" class="input-field" placeholder="C:\Users\you\.ssh\id_rsa">
       <label class="field-label">Password (if no key)</label>
-      <input id="sshPassword" type="password" class="input-field" autocomplete="off">
+      <input id="sshPassword" type="password" class="input-field" autocomplete="new-password">
     </div>
 
     <div id="tcpFields" class="docker-fields hidden">
