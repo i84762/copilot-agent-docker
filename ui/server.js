@@ -13,7 +13,11 @@ const server = http.createServer(app);
 const wss    = new WebSocket.Server({ server });
 
 app.use(express.json({ limit: '10mb' }));
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), {
+  etag: false,
+  lastModified: false,
+  setHeaders: (res) => res.setHeader('Cache-Control', 'no-store'),
+}));
 
 const PORT     = process.env.UI_PORT || 3000;
 const ROOT_DIR = path.join(__dirname, '..'); // copilot-agent-docker root

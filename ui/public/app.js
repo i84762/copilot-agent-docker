@@ -264,6 +264,7 @@ function wsSend(obj) {
 // ── State machine ─────────────────────────────────────────────────────────────
 
 function enterState(newState) {
+  console.log('[state]', newState);
   state = newState;
   updateButtons();
   updateTerminalTitle();
