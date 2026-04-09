@@ -133,6 +133,7 @@ function connectWS() {
         if (!bubble) {
           bubble = appendChatBubble('agent', '');
           bubble.id = 'currentAgentBubble';
+          bubble.classList.add('bubble-active');
         }
         bubble._rawText = (bubble._rawText || '') + msg.text;
         // Debounce incremental markdown render (every 300ms while streaming)
@@ -153,7 +154,10 @@ function connectWS() {
         if (bubble && bubble._rawText) {
           renderBubbleMarkdown(bubble, false);
         }
-        if (bubble) bubble.removeAttribute('id');
+        if (bubble) {
+          bubble.removeAttribute('id');
+          bubble.classList.remove('bubble-active');
+        }
         hideChatTyping();
         scrollChatToBottom();
         break;

@@ -676,7 +676,9 @@ select.input-field { cursor: pointer; appearance: none; background-image: url("d
   font-size: 13px;
   min-height: 18px;
 }
-.bubble-streaming::after {
+/* Blinking cursor only on the currently-active streaming bubble */
+.bubble-active .bubble-streaming::after,
+.bubble-active .bubble-markdown::after {
   content: '▋';
   animation: blink .9s step-end infinite;
   color: var(--blue);
