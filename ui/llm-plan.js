@@ -164,7 +164,14 @@ async function streamCopilot(messages, config, onChunk, onDone, onError) {
     return;
   }
 
-  await consumeSSE(res, onChunk, onDone, onError);
+  // Extract quota from response headers (GitHub Models returns these)
+  const quota = {
+    provider:  'GitHub Models',
+    remaining: res.headers.get('x-ratelimit-remaining-requests') || res.headers.get('x-ms-quota-remaining-requests'),
+    limit:     res.headers.get('x-ratelimit-limit-requests')     || res.headers.get('x-ms-quota-limit-requests'),
+  };
+
+  await consumeSSE(res, onChunk, (q) => onDone(q), onError, quota);
 }
 
 /**
@@ -206,7 +213,13 @@ async function streamClaude(messages, config, onChunk, onDone, onError) {
     return;
   }
 
-  await consumeSSEAnthropic(res, onChunk, onDone, onError);
+  const quota = {
+    provider:  'Anthropic',
+    remaining: res.headers.get('anthropic-ratelimit-requests-remaining'),
+    limit:     res.headers.get('anthropic-ratelimit-requests-limit'),
+  };
+
+  await consumeSSEAnthropic(res, onChunk, (q) => onDone(q), onError, quota);
 }
 
 /**
@@ -246,13 +259,14 @@ async function streamGemini(messages, config, onChunk, onDone, onError) {
     return;
   }
 
-  await consumeSSEGemini(res, onChunk, onDone, onError);
+  // Gemini doesn't expose quota headers — pass null
+  await consumeSSEGemini(res, onChunk, () => onDone(null), onError);
 }
 
 // ── SSE stream consumers ─────────────────────────────────────────────────────
 
 /** OpenAI-style SSE: data: {"choices":[{"delta":{"content":"..."}}]} */
-async function consumeSSE(res, onChunk, onDone, onError) {
+async function consumeSSE(res, onChunk, onDone, onError, quota) {
   const reader  = res.body.getReader();
   const decoder = new TextDecoder();
   let   buf     = '';
@@ -282,7 +296,7 @@ async function consumeSSE(res, onChunk, onDone, onError) {
       for (const line of lines) {
         if (!line.startsWith('data: ')) continue;
         const data = line.slice(6).trim();
-        if (data === '[DONE]') { clearTimeout(stallTimer); onDone(); return; }
+        if (data === '[DONE]') { clearTimeout(stallTimer); onDone(quota); return; }
         try {
           const obj  = JSON.parse(data);
           const text = obj.choices?.[0]?.delta?.content;
@@ -296,13 +310,13 @@ async function consumeSSE(res, onChunk, onDone, onError) {
               onError(new Error('Model attempted tool_calls (not supported in planning mode). Try the Claude agent instead.'));
               return;
             }
-            clearTimeout(stallTimer); onDone(); return;
+            clearTimeout(stallTimer); onDone(quota); return;
           }
         } catch { /* skip malformed */ }
       }
     }
     clearTimeout(stallTimer);
-    onDone();
+    onDone(quota);
   } catch (e) {
     clearTimeout(stallTimer);
     onError(e);
@@ -312,7 +326,7 @@ async function consumeSSE(res, onChunk, onDone, onError) {
 }
 
 /** Anthropic SSE: event: content_block_delta  data: {"delta":{"text":"..."}} */
-async function consumeSSEAnthropic(res, onChunk, onDone, onError) {
+async function consumeSSEAnthropic(res, onChunk, onDone, onError, quota) {
   const reader  = res.body.getReader();
   const decoder = new TextDecoder();
   let   buf     = '';
@@ -348,13 +362,13 @@ async function consumeSSEAnthropic(res, onChunk, onDone, onError) {
             const text = obj.delta?.text;
             if (text) onChunk(text);
           } else if (lastEvent === 'message_stop') {
-            clearTimeout(stallTimer); onDone(); return;
+            clearTimeout(stallTimer); onDone(quota); return;
           }
         } catch { /* skip */ }
       }
     }
     clearTimeout(stallTimer);
-    onDone();
+    onDone(quota);
   } catch (e) {
     clearTimeout(stallTimer);
     onError(e);
@@ -428,9 +442,9 @@ async function sendPlanMessage(sessionId, userText, onChunk, onDone, onError) {
 
   let full = '';
   const accChunk = text => { full += text; onChunk(text); };
-  const accDone  = () => {
+  const accDone  = (quota) => {
     sess.messages.push({ role: 'assistant', content: full });
-    onDone(full);
+    onDone(full, quota);
   };
 
   const agent = sess.agent;

@@ -158,6 +158,11 @@ function connectWS() {
         break;
       }
 
+      case 'quota_update': {
+        updateQuotaBadge(msg.remaining, msg.limit, msg.provider);
+        break;
+      }
+
       case 'chat_typing': {
         showChatTyping();
         scrollChatToBottom();
@@ -178,6 +183,8 @@ function connectWS() {
         setActiveContainerLabel(msg.containerId);
         if (msg.mode === 'plan') {
           enterState('planning');
+          // Populate chat header with agent info
+          updateChatHeader(msg.agent, msg.model);
           // Show welcome system message in chat
           appendChatBubble('system', '🗺 Planning session started. The agent is analyzing your project…');
           scrollChatToBottom();
@@ -287,6 +294,8 @@ function enterState(newState) {
   const inPlanMode = (newState === 'planning');
   $('terminal').classList.toggle('hidden', inPlanMode);
   $('chatPanel').classList.toggle('hidden', !inPlanMode);
+  // Hide chat header when not in planning mode
+  if (!inPlanMode && $('chatHeader')) $('chatHeader').classList.add('hidden');
   // Always clear any lingering progress overlay when switching state
   showLaunchProgress(false);
 
@@ -1102,9 +1111,8 @@ function showLaunchProgress(visible) {
   const panel = $('launchProgress');
   if (!panel) return;
   if (visible) {
-    panel.classList.remove('hidden');
+    panel.classList.remove('hidden', 'lp-done', 'lp-error');
     if (!$('lpSteps').children.length) {
-      // Pre-populate all steps as pending
       Object.entries(STEP_LABELS).forEach(([id, label]) => {
         const li = document.createElement('li');
         li.className = 'lp-step pending';
@@ -1114,9 +1122,14 @@ function showLaunchProgress(visible) {
       });
     }
   } else {
-    panel.classList.add('hidden');
-    $('lpSteps').innerHTML = '';
-    setProgressTitle('Launching…', '');
+    // Mark done → auto-collapse via CSS transition after 1.5s
+    panel.classList.add('lp-done');
+    setTimeout(() => {
+      panel.classList.add('hidden');
+      panel.classList.remove('lp-done');
+      $('lpSteps').innerHTML = '';
+      setProgressTitle('Launching…');
+    }, 1500);
   }
 }
 
@@ -1140,10 +1153,47 @@ function setProgressTitle(text, state) {
   const el = $('lpTitle');
   if (!el) return;
   el.textContent = text;
-  el.className = `lp-title${state ? ' ' + state : ''}`;
 }
 
-// ── Docker status ─────────────────────────────────────────────────────────────
+// ── Chat header & quota ───────────────────────────────────────────────────────
+
+const AGENT_ICONS = {
+  copilot: '🤖', claude: '🟠', gemini: '🔵', aider: '🛠️'
+};
+
+function updateChatHeader(agent, model) {
+  const header = $('chatHeader');
+  if (!header) return;
+  const icon = AGENT_ICONS[(agent || '').toLowerCase()] || '🤖';
+  const name = (agent || 'Agent').replace(/^\w/, c => c.toUpperCase());
+  $('chatAgentIcon').textContent = icon;
+  $('chatAgentName').textContent = name;
+  $('chatAgentModel').textContent = model || '';
+  header.classList.remove('hidden');
+  // Reset quota badge when starting a new session
+  updateQuotaBadge(null, null, null);
+}
+
+function updateQuotaBadge(remaining, limit, provider) {
+  const badge = $('quotaBadge');
+  if (!badge) return;
+  if (remaining === null || remaining === undefined) {
+    badge.classList.add('hidden');
+    return;
+  }
+  const rem = parseInt(remaining, 10);
+  const lim = parseInt(limit, 10) || 0;
+  badge.classList.remove('hidden', 'quota-ok', 'quota-warn', 'quota-low');
+  const pct = lim > 0 ? rem / lim : 1;
+  if (pct > 0.4)      badge.classList.add('quota-ok');
+  else if (pct > 0.1) badge.classList.add('quota-warn');
+  else                badge.classList.add('quota-low');
+  const suffix = lim > 0 ? `/${lim}` : '';
+  badge.textContent = `${rem}${suffix} requests left`;
+  badge.title = `${provider || 'API'}: ${rem}${suffix} requests remaining in current window`;
+}
+
+
 
 async function checkDockerStatus() {
   try {

@@ -600,7 +600,12 @@ wss.on('connection', ws => {
           // Use a virtual container ID so the client state machine works normally
           const virtualId = `plan-api-${Date.now()}`;
           activeId = virtualId;
-          safeSend(ws, { type: 'container_started', containerId: virtualId, mode: 'plan' });
+          // Determine model label for UI
+          const modelLabel = planAgent === 'copilot' ? 'gpt-4o (GitHub Models)'
+            : planAgent === 'claude' ? 'Claude Opus' 
+            : planAgent === 'gemini' ? 'Gemini 2.0 Flash'
+            : planAgent === 'aider'  ? 'Aider (Claude/Copilot)' : '';
+          safeSend(ws, { type: 'container_started', containerId: virtualId, mode: 'plan', agent: planAgent, model: modelLabel });
           devLog('[plan] plan_container virtual session ready — sending initial message');
 
           // Send the first message automatically
@@ -618,9 +623,10 @@ wss.on('connection', ws => {
             activePlanSessionId,
             initialMsg,
             (chunk) => { safeSend(ws, { type: 'chat_chunk', text: chunk }); },
-            (_full) => {
+            (_full, quota) => {
               agentTyping = false;
               safeSend(ws, { type: 'chat_message_end' });
+              if (quota?.remaining != null) safeSend(ws, { type: 'quota_update', ...quota });
               // Check if plan is already finalized
               const plan = llmPlan.extractFinalPlan(activePlanSessionId);
               if (plan) {
@@ -662,9 +668,10 @@ wss.on('connection', ws => {
               activePlanSessionId,
               msg.text,
               (chunk) => { safeSend(ws, { type: 'chat_chunk', text: chunk }); },
-              (_full) => {
+              (_full, quota) => {
                 agentTyping = false;
                 safeSend(ws, { type: 'chat_message_end' });
+                if (quota?.remaining != null) safeSend(ws, { type: 'quota_update', ...quota });
                 const plan = llmPlan.extractFinalPlan(activePlanSessionId);
                 if (plan) {
                   const sess = llmPlan.getSession(activePlanSessionId);

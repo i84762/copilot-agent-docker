@@ -237,16 +237,32 @@
       </div>
     </div>
 
-    <!-- Launch progress overlay — shown while container is being created/started -->
+    <!-- Launch progress — compact strip below toolbar, auto-hides on done -->
     <div id="launchProgress" class="launch-progress hidden">
-      <div class="lp-title" id="lpTitle">Launching…</div>
-      <ul id="lpSteps" class="lp-steps"></ul>
+      <div class="lp-strip">
+        <span class="lp-spinner"></span>
+        <span class="lp-title" id="lpTitle">Launching…</span>
+        <ul id="lpSteps" class="lp-steps"></ul>
+      </div>
     </div>
 
     <div id="terminal"></div>
 
     <!-- Chat panel — shown in planning mode instead of terminal -->
     <div id="chatPanel" class="chat-panel hidden">
+      <!-- Agent info header — shown at top of every chat session -->
+      <div id="chatHeader" class="chat-header hidden">
+        <div class="chat-header-left">
+          <span id="chatAgentIcon" class="chat-agent-icon">🤖</span>
+          <div class="chat-agent-info">
+            <span id="chatAgentName" class="chat-agent-name">Agent</span>
+            <span id="chatAgentModel" class="chat-agent-model"></span>
+          </div>
+        </div>
+        <div class="chat-header-right">
+          <span id="quotaBadge" class="quota-badge hidden" title="Remaining API requests in current window"></span>
+        </div>
+      </div>
       <div id="chatMessages" class="chat-messages"></div>
       <div id="chatTyping" class="chat-typing hidden">
         <div class="typing-dots"><span></span><span></span><span></span></div>

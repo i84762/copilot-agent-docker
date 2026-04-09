@@ -334,43 +334,54 @@ select.input-field { cursor: pointer; appearance: none; background-image: url("d
 /* chatPanel uses the same space as #terminal; shown/hidden exclusively */
 #chatPanel { flex: 1; min-height: 0; }
 
-/* ── Launch progress overlay ───────────────────────────────────────────────── */
+/* ── Launch progress — compact strip (replaces full overlay) ───────────────── */
 .launch-progress {
-  position: absolute;
-  top: 36px; /* below toolbar */
-  left: 0; right: 0;
-  padding: 28px 36px;
-  background: #0d1117;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 6px 14px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  z-index: 10;
-  border-bottom: 1px solid var(--border);
+  gap: 0;
+  flex-shrink: 0;
+  overflow: hidden;
+  transition: max-height .3s ease, padding .3s ease;
+  max-height: 160px;
 }
 .launch-progress.hidden { display: none; }
+.launch-progress.lp-done {
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-bottom-width: 0;
+}
 
-#terminalPanel { position: relative; }
-
-.lp-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--text);
+.lp-strip {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  flex-wrap: wrap;
 }
-.lp-title::before {
-  content: '';
-  display: inline-block;
-  width: 14px; height: 14px;
+
+.lp-spinner {
+  width: 12px; height: 12px;
   border: 2px solid var(--green);
   border-top-color: transparent;
   border-radius: 50%;
   animation: lp-spin 0.7s linear infinite;
   flex-shrink: 0;
+  display: inline-block;
 }
-.lp-title.done::before  { border: none; content: '✅'; width: auto; height: auto; animation: none; }
-.lp-title.error::before { border: none; content: '❌'; width: auto; height: auto; animation: none; }
+.launch-progress.lp-done .lp-spinner,
+.launch-progress.lp-error .lp-spinner { display: none; }
+
+.lp-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+.launch-progress.lp-done  .lp-title { color: var(--green); }
+.launch-progress.lp-error .lp-title { color: var(--red); }
 
 @keyframes lp-spin { to { transform: rotate(360deg); } }
 
@@ -378,22 +389,26 @@ select.input-field { cursor: pointer; appearance: none; background-image: url("d
   list-style: none;
   padding: 0; margin: 0;
   display: flex;
-  flex-direction: column;
-  gap: 7px;
+  flex-direction: row;
+  gap: 0;
+  flex-wrap: wrap;
 }
 .lp-step {
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 12px;
+  gap: 4px;
+  font-size: 11px;
   color: var(--text-dim);
   transition: color 0.2s;
+  padding: 0 6px;
+  border-right: 1px solid var(--border);
 }
+.lp-step:last-child { border-right: none; }
 .lp-step .lp-icon {
-  width: 16px; height: 16px;
+  width: 13px; height: 13px;
   display: flex; align-items: center; justify-content: center;
   flex-shrink: 0;
-  font-size: 13px;
+  font-size: 11px;
 }
 .lp-step.pending .lp-icon { color: var(--border); }
 .lp-step.pending .lp-icon::before { content: '○'; }
@@ -404,12 +419,59 @@ select.input-field { cursor: pointer; appearance: none; background-image: url("d
   border-top-color: transparent;
   border-radius: 50%;
   animation: lp-spin 0.7s linear infinite;
-  width: 12px; height: 12px;
+  width: 10px; height: 10px;
 }
 .lp-step.ok      { color: var(--text-dim); }
 .lp-step.ok      .lp-icon::before { content: '✓'; color: var(--green); font-weight: 700; }
 .lp-step.error   { color: var(--red); }
 .lp-step.error   .lp-icon::before { content: '✗'; color: var(--red); font-weight: 700; }
+
+/* ── Chat header — agent info bar at top of chat panel ─────────────────────── */
+.chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  gap: 12px;
+}
+.chat-header.hidden { display: none; }
+.chat-header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.chat-agent-icon { font-size: 20px; line-height: 1; }
+.chat-agent-info { display: flex; flex-direction: column; gap: 1px; }
+.chat-agent-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.chat-agent-model {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--mono);
+}
+.chat-header-right { display: flex; align-items: center; gap: 8px; }
+
+/* Quota badge */
+.quota-badge {
+  font-size: 11px;
+  padding: 2px 9px;
+  border-radius: 99px;
+  border: 1px solid var(--border2);
+  color: var(--text-muted);
+  background: var(--surface2);
+  white-space: nowrap;
+  cursor: default;
+}
+.quota-badge.quota-ok     { border-color: var(--green);  color: var(--green);  background: rgba(63,185,80,.08);  }
+.quota-badge.quota-warn   { border-color: var(--yellow); color: var(--yellow); background: rgba(210,153,34,.08); }
+.quota-badge.quota-low    { border-color: var(--red);    color: var(--red);    background: rgba(248,81,73,.08);  }
+.quota-badge.hidden { display: none; }
 
 /* ── Chat panel (plan mode) ────────────────────────────────────────────────── */
 .chat-panel {
