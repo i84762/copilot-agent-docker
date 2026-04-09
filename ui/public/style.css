@@ -475,41 +475,48 @@ select.input-field { cursor: pointer; appearance: none; background-image: url("d
 .quota-badge.quota-low    { border-color: var(--red);    color: var(--red);    background: rgba(248,81,73,.08);  }
 .quota-badge.hidden { display: none; }
 
-/* ── Planning phase timeline — floating vertical line, right edge of chat ───── */
+/* ── Planning phase timeline — compact floating widget, top-right of chat ───── */
 #chatPanel { position: relative; }
 
 .plan-stepper {
   position: absolute;
-  top: 0; right: 14px; bottom: 0;
+  top: 12px;
+  right: 12px;
   width: 20px;
+  /* height is auto — sized to fit 5 nodes + line */
   display: flex;
   flex-direction: column;
   align-items: center;
-  pointer-events: none;   /* float over content, don't block clicks */
+  pointer-events: none;
   z-index: 10;
+  /* subtle frosted card */
+  background: rgba(13,17,23,.7);
+  border: 1px solid var(--border2);
+  border-radius: 12px;
+  padding: 8px 0;
+  backdrop-filter: blur(6px);
 }
 .plan-stepper.hidden { display: none; }
-
-/* The continuous vertical line running through all nodes */
-.plan-stepper::before {
-  content: '';
-  position: absolute;
-  top: 16px; bottom: 16px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 2px;
-  background: var(--border2);
-  border-radius: 1px;
-}
 
 .plan-stepper-track {
   display: flex;
   flex-direction: column;
   align-items: center;
   width: 100%;
-  flex: 1;
-  padding: 14px 0;
   gap: 0;
+  position: relative;
+}
+
+/* The vertical line connecting all nodes */
+.plan-stepper-track::before {
+  content: '';
+  position: absolute;
+  top: 7px; bottom: 7px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 1.5px;
+  background: var(--border2);
+  border-radius: 1px;
 }
 
 .ps-step {
@@ -517,20 +524,19 @@ select.input-field { cursor: pointer; appearance: none; background-image: url("d
   align-items: center;
   justify-content: center;
   width: 100%;
-  flex: 1;
+  height: 22px;
   position: relative;
-  pointer-events: all;   /* re-enable for tooltip */
+  pointer-events: all;
   cursor: default;
 }
 
 .ps-icon {
-  width: 10px; height: 10px;
+  width: 8px; height: 8px;
   border-radius: 50%;
   background: var(--border2);
-  border: 2px solid var(--surface);
-  box-shadow: 0 0 0 1.5px var(--border2);
+  border: 1.5px solid rgba(13,17,23,.8);
   flex-shrink: 0;
-  transition: background .2s, box-shadow .2s;
+  transition: background .2s, box-shadow .2s, width .15s, height .15s;
   position: relative;
   z-index: 1;
 }
@@ -540,7 +546,7 @@ select.input-field { cursor: pointer; appearance: none; background-image: url("d
 .ps-step[title]:hover::before {
   content: attr(title);
   position: absolute;
-  right: calc(100% + 6px);
+  right: calc(100% + 8px);
   top: 50%;
   transform: translateY(-50%);
   background: rgba(13,17,23,.92);
@@ -557,26 +563,24 @@ select.input-field { cursor: pointer; appearance: none; background-image: url("d
 /* States */
 .ps-step.ps-pending .ps-icon {
   background: var(--border2);
-  box-shadow: 0 0 0 1.5px var(--border2);
 }
 
 .ps-step.ps-active .ps-icon {
-  width: 14px; height: 14px;
+  width: 11px; height: 11px;
   background: var(--purple);
+  border-color: rgba(13,17,23,.8);
   box-shadow: 0 0 0 3px rgba(139,92,246,.3);
-  border-color: var(--bg);
   animation: ps-pulse 1.4s ease-in-out infinite;
 }
 
 .ps-step.ps-done .ps-icon {
   background: var(--green);
-  box-shadow: 0 0 0 1.5px var(--green);
-  border-color: var(--bg);
+  border-color: rgba(13,17,23,.8);
 }
 
 @keyframes ps-pulse {
-  0%, 100% { box-shadow: 0 0 0 3px rgba(139,92,246,.25); }
-  50%       { box-shadow: 0 0 0 6px rgba(139,92,246,.0);  }
+  0%, 100% { box-shadow: 0 0 0 2px rgba(139,92,246,.35); }
+  50%       { box-shadow: 0 0 0 5px rgba(139,92,246,.0);  }
 }
 
 
