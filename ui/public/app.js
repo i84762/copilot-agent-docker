@@ -997,6 +997,9 @@ function getSectionStyle(headingText) {
   return null;
 }
 
+// Initialise marked once with global defaults
+marked.use({ breaks: true, gfm: true });
+
 /**
  * Render accumulated agent text as styled markdown.
  * streaming=true: update in-place without removing the current bubble element id.
@@ -1004,27 +1007,27 @@ function getSectionStyle(headingText) {
 function renderBubbleMarkdown(bubble, streaming = false) {
   if (!bubble._rawText) return;
   try {
-    // Use marked with a custom renderer for headings
-    const renderer = new marked.Renderer();
-    renderer.heading = function({ text, depth }) {
-      const style = getSectionStyle(text);
-      const tag = `h${Math.min(depth, 4)}`;
-      if (style) {
-        return `<${tag} class="section-heading ${style.cls}">${style.icon} ${text}</${tag}>`;
-      }
-      return `<${tag}>${text}</${tag}>`;
-    };
-    // Code blocks with copy button
-    renderer.code = function({ text, lang }) {
-      const langLabel = lang ? `<span class="code-lang">${lang}</span>` : '';
-      const escaped = text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-      return `<div class="code-block">` +
-        `<div class="code-block-header">${langLabel}<button class="code-copy-btn" onclick="copyCode(this)">Copy</button></div>` +
-        `<pre><code>${escaped}</code></pre>` +
-        `</div>`;
+    // Build a fresh Marked instance with our custom renderer so global state is not mutated
+    const renderer = {
+      heading({ text, depth }) {
+        const style = getSectionStyle(text);
+        const tag = `h${Math.min(depth, 4)}`;
+        if (style) {
+          return `<${tag} class="section-heading ${style.cls}">${style.icon} ${text}</${tag}>`;
+        }
+        return `<${tag}>${text}</${tag}>`;
+      },
+      code({ text, lang }) {
+        const langLabel = lang ? `<span class="code-lang">${lang}</span>` : '';
+        const escaped = (text || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        return `<div class="code-block">` +
+          `<div class="code-block-header">${langLabel}<button class="code-copy-btn" onclick="copyCode(this)">Copy</button></div>` +
+          `<pre><code>${escaped}</code></pre>` +
+          `</div>`;
+      },
     };
 
-    const html = marked.parse(bubble._rawText, { breaks: true, gfm: true, renderer });
+    const html = marked.parse(bubble._rawText, { renderer });
     const existing = bubble.querySelector('.bubble-markdown');
     if (existing) {
       existing.innerHTML = html;
