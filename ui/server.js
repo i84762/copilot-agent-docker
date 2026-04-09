@@ -394,8 +394,21 @@ async function fetchCopilotModels(token) {
   if (!res.ok) throw new Error(`GitHub Models API ${res.status}`);
   const data = await res.json();
   const list = Array.isArray(data) ? data : (data.data || []);
+
+  // Extract short model name from Azure ML registry URIs:
+  // "azureml://registries/azure-openai/models/gpt-4o/versions/2" → "gpt-4o"
+  function shortId(raw) {
+    if (!raw) return raw;
+    const m = raw.match(/\/models\/([^/]+)/);
+    return m ? m[1] : raw;
+  }
+
   return list
-    .map(m => ({ id: m.id || m.name, name: m.friendly_name || m.display_name || m.name || m.id }))
+    .map(m => {
+      const id = shortId(m.id || m.name);
+      const name = m.friendly_name || m.display_name || id;
+      return { id, name };
+    })
     .filter(m => m.id)
     .sort((a, b) => a.id.localeCompare(b.id));
 }
