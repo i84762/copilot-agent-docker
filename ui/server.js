@@ -186,7 +186,15 @@ function buildEnv(cfg, mode) {
     COPILOT_PLAN_MODE:    mode === 'plan'   ? 'true' : 'false',
     COPILOT_FORCE_RESUME: mode === 'resume' ? 'true' : 'false',
     COPILOT_NEW_SESSION:  mode === 'new'    ? 'true' : 'false',
+    // Custom agent fields
+    CUSTOM_API_BASE:      cfg.customApiBase || '',
+    CUSTOM_API_KEY:       cfg.customApiKey || '',
+    CUSTOM_MODEL:         cfg.customModel || '',
   };
+  // MCP servers (passed as JSON for container to read)
+  if (Array.isArray(cfg.mcpServers) && cfg.mcpServers.length) {
+    pairs.ARCHON_MCP_SERVERS = JSON.stringify(cfg.mcpServers);
+  }
   return Object.entries(pairs)
     .filter(([, v]) => v !== '')
     .map(([k, v]) => `${k}=${v}`);
@@ -452,6 +460,34 @@ async function fetchGeminiModels(apiKey) {
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 
+// ── Project stats ────────────────────────────────────────────────────────────
+app.get('/api/project/stats', (req, res) => {
+  const projectPath = req.query.path;
+  if (!projectPath || !fs.existsSync(projectPath)) {
+    return res.json({ exists: false });
+  }
+  try {
+    const index = llmPlan.buildProjectIndex ? llmPlan.buildProjectIndex(projectPath) : null;
+    if (!index) return res.json({ exists: true, totalFiles: 0, languages: [] });
+    const extCounts = {};
+    (index.files || []).forEach(f => {
+      if (f.ext) extCounts[f.ext] = (extCounts[f.ext] || 0) + 1;
+    });
+    const topExts = Object.entries(extCounts).sort((a, b) => b[1] - a[1]).slice(0, 5);
+    const langMap = { '.ts': 'TypeScript', '.js': 'JavaScript', '.dart': 'Dart', '.py': 'Python', '.go': 'Go', '.rs': 'Rust', '.java': 'Java', '.css': 'CSS', '.html': 'HTML', '.md': 'Markdown', '.rb': 'Ruby', '.php': 'PHP', '.swift': 'Swift', '.kt': 'Kotlin', '.c': 'C', '.cpp': 'C++', '.cs': 'C#' };
+    const languages = topExts.map(([ext]) => langMap[ext] || ext).filter(Boolean);
+    res.json({
+      exists: true,
+      totalFiles: index.totalFiles || 0,
+      totalDirs: index.totalDirs || 0,
+      truncated: index.truncated || false,
+      languages,
+    });
+  } catch (e) {
+    res.json({ exists: true, totalFiles: 0, languages: [], error: e.message });
+  }
+});
+
 app.get('/api/models', async (req, res) => {
   const { agent, token } = req.query;
   if (!agent || !token) return res.status(400).json({ error: 'agent and token required' });
@@ -712,7 +748,7 @@ wss.on('connection', ws => {
             if (history.length) safeSend(ws, { type: 'chat_history', messages: history });
             // Tell the agent to continue from where it left off
             const stepDef = llmPlan.PLANNING_STEPS.find(s => s.id === planResult.currentStep);
-            const resumeMsg = `We are resuming our planning session. We were on Step: ${stepDef?.label || planResult.currentStep}. Please briefly summarize where we left off and continue from that point.`;
+            const resumeMsg = `We are resuming the planning wizard on Step: ${stepDef?.label || planResult.currentStep}. Emit <STEP:${planResult.currentStep}>, then one <ANALYSIS title="Where we left off"> summarizing the current state, then either the next <QUESTION> for this step or <STEP_DONE:${planResult.currentStep}>. Remember: strict protocol, one question max.`;
             safeSend(ws, { type: 'chat_system', text: `📂 Resumed from **${stepDef?.label || planResult.currentStep}** — ${history.length} messages restored` });
             safeSend(ws, { type: 'chat_typing' });
             agentTyping = true;
@@ -735,10 +771,7 @@ wss.on('connection', ws => {
             // Fresh session — kick off Step 1
             safeSend(ws, { type: 'plan_step', stepId: 'requirements', done: false });
             const initialMsg =
-              'Please begin Step 1: Requirements Clarification. ' +
-              'Restate the task in your own words, list what you understand as required, ' +
-              'and ask any clarifying questions needed before proceeding. ' +
-              'Do NOT review the codebase yet — that is Step 2.';
+              'Begin Step 1: Requirements Clarification. Emit <STEP:requirements>, then one <ANALYSIS title="Task Understanding"> block restating the task in your own words and listing required outcomes, then either ONE <QUESTION> for a clarifying decision that materially affects direction, OR <STEP_DONE:requirements> if nothing is blocking. Remember the strict protocol — no text outside tagged blocks, one question max. Do NOT review the codebase yet; that is Step 2.';
             safeSend(ws, { type: 'chat_typing' });
             agentTyping = true;
             llmPlan.sendPlanMessage(activePlanSessionId, initialMsg,
@@ -850,8 +883,9 @@ wss.on('connection', ws => {
         const stepNum = idx + 2;  // 1-indexed, next step
         const advanceMsg =
           `The user has confirmed they are ready to move on. ` +
-          `Please move to Step ${stepNum}: ${next.label}. ` +
-          `Begin with <STEP:${next.id}> on its own line.`;
+          `Move to Step ${stepNum}: ${next.label}. ` +
+          `Emit <STEP:${next.id}> as the first line, then follow the strict protocol for this step: ` +
+          `<ANALYSIS> blocks for narrative, at most one <QUESTION> per reply, or <STEP_DONE:${next.id}> if no decisions are blocking.`;
 
         llmPlan.sendPlanMessage(
           activePlanSessionId,

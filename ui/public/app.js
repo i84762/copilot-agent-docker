@@ -39,8 +39,7 @@ term.loadAddon(fitAddon);
 term.open(document.getElementById('terminal'));
 fitAddon.fit();
 
-term.writeln('\x1b[90mArchon — ready.\x1b[0m');
-term.writeln('\x1b[90mFill in the form on the left and click Plan or Start.\x1b[0m\r\n');
+term.writeln('\x1b[90mArchon — ready.\x1b[0m\r\n');
 
 // Resize observer → keep xterm fitted
 const resizeObs = new ResizeObserver(() => fitAddon.fit());
@@ -65,8 +64,36 @@ let lastConfig        = null;
 let pendingPlanConfig = null;  // held while waiting for plan_session_info check
 let logBuffer         = '';
 let containerRefreshTimer = null;
-let streamRenderTimer = null;
-let currentPlanStep   = 'requirements'; // tracks active planning step
+// ── Planning wizard state ────────────────────────────────────────────────────
+let planningState = {
+  decisions: [],        // { id, title, answer, step }
+  analysis: [],         // { title, body, step }
+  currentQuestion: null,
+  step: 'requirements',
+  completedSteps: [],
+  agentTurnBuffer: '',  // accumulates streaming text for current agent reply
+};
+
+// ── Screen management ────────────────────────────────────────────────────────
+// screen controls which panel is visible (orthogonal to state machine)
+
+let screen = 'home'; // 'home' | 'planning' | 'execution'
+
+function setScreen(newScreen) {
+  screen = newScreen;
+  $('homeScreen')?.classList.toggle('hidden', newScreen !== 'home');
+  $('terminalPanel')?.classList.toggle('hidden', newScreen === 'home');
+  $('homeBtn')?.classList.toggle('hidden', newScreen === 'home');
+  if (newScreen === 'execution') {
+    $('chatPanel')?.classList.add('hidden');
+    $('terminal')?.classList.remove('hidden');
+    fitAddon.fit();
+  }
+  if (newScreen === 'home') {
+    renderAgentCards();
+    updateHomeButtons();
+  }
+}
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
 
@@ -88,8 +115,6 @@ function connectWS() {
       activeContainerId = null;
       setActiveContainerLabel(null);
       enterState('idle');
-      appendChatBubble('system', '⚠️ Connection lost. Server may have restarted. Ready for a new session.');
-      scrollChatToBottom();
     }
     setTimeout(connectWS, 3000);
   };
@@ -129,54 +154,28 @@ function connectWS() {
       // On message_end: re-render the completed bubble as markdown.
 
       case 'chat_chunk': {
-        hideChatTyping();
-        let bubble = document.getElementById('currentAgentBubble');
-        if (!bubble) {
-          bubble = appendChatBubble('agent', '');
-          bubble.id = 'currentAgentBubble';
-          bubble.classList.add('bubble-active');
-        }
-        bubble._rawText = (bubble._rawText || '') + msg.text;
-        // Debounce incremental markdown render (every 300ms while streaming)
-        if (!streamRenderTimer) {
-          streamRenderTimer = setTimeout(() => {
-            streamRenderTimer = null;
-            const b = document.getElementById('currentAgentBubble');
-            if (b && b._rawText) renderBubbleMarkdown(b, true);
-          }, 300);
-        }
-        scrollChatToBottom();
+        // Accumulate streaming text; show thinking spinner
+        planningState.agentTurnBuffer += (msg.text || '');
+        showThinking(true);
         break;
       }
 
       case 'chat_message_end': {
-        if (streamRenderTimer) { clearTimeout(streamRenderTimer); streamRenderTimer = null; }
-        const bubble = document.getElementById('currentAgentBubble');
-        if (bubble && bubble._rawText) {
-          renderBubbleMarkdown(bubble, false);
-        }
-        if (bubble) {
-          bubble.removeAttribute('id');
-          bubble.classList.remove('bubble-active');
-        }
-        hideChatTyping();
-        scrollChatToBottom();
+        // Parse the full agent turn and dispatch to wizard UI
+        const turnText = planningState.agentTurnBuffer;
+        planningState.agentTurnBuffer = '';
+        if (turnText) processAgentTurn(turnText);
         break;
       }
 
       case 'chat_history': {
-        // Render saved messages from a resumed planning session
+        // Replay saved assistant messages through the tag parser
         const msgs = msg.messages || [];
         msgs.forEach(m => {
-          if (m.role === 'user') {
-            appendChatBubble('user', m.content);
-          } else if (m.role === 'assistant' && m.content) {
-            const bubble = appendChatBubble('agent');
-            bubble._rawText = m.content;
-            renderBubbleMarkdown(bubble, false);
+          if (m.role === 'assistant' && m.content) {
+            processAgentTurn(m.content);
           }
         });
-        scrollChatToBottom();
         break;
       }
 
@@ -186,8 +185,7 @@ function connectWS() {
       }
 
       case 'plan_step': {
-        updatePlanStep(msg.stepId, msg.done);
-        updateNextPhaseBtn();
+        updateProgressRail(msg.stepId, msg.done);
         break;
       }
 
@@ -204,15 +202,13 @@ function connectWS() {
       }
 
       case 'chat_typing': {
-        showChatTyping();
-        scrollChatToBottom();
+        showThinking(true);
         break;
       }
 
       case 'chat_system': {
-        appendChatBubble('system', msg.text);
-        hideChatTyping();
-        scrollChatToBottom();
+        // System messages are shown as toast notifications
+        toast(msg.text, 'info');
         break;
       }
       // ──────────────────────────────────────────────────────────────────────
@@ -225,9 +221,10 @@ function connectWS() {
           enterState('planning');
           updateChatHeader(msg.agent, msg.model);
           if (!msg.resumed) {
-            appendChatBubble('system', '🗺 Planning session started. The agent is analyzing your project…');
+            resetPlanningState();
+            initProgressRail();
+            showThinking(true);
           }
-          scrollChatToBottom();
           // Still sync PTY size for the underlying terminal process
           sendResize();
         } else {
@@ -327,40 +324,26 @@ function enterState(newState) {
   updateButtons();
   updateTerminalTitle();
 
-  const modeTag = $('modeTag');
-  modeTag.classList.remove('hidden', 'mode-plan', 'mode-run', 'mode-resume');
-
-  // Toggle between terminal and chat panel
-  const inPlanMode = (newState === 'planning');
-  $('terminal').classList.toggle('hidden', inPlanMode);
-  $('chatPanel').classList.toggle('hidden', !inPlanMode);
-  // Restore toolbar title and hide stepper when leaving planning mode
-  if (!inPlanMode) {
-    const title = $('terminalTitle');
-    if (title) title.textContent = 'Idle';
-    hidePlanStepper();
+  // Screen transitions
+  if (newState === 'planning') {
+    setScreen('planning');
+    $('terminal').classList.add('hidden');
+    $('chatPanel').classList.remove('hidden');
+  } else if (newState === 'running') {
+    setScreen('execution');
+    $('terminal').classList.remove('hidden');
+    $('chatPanel').classList.add('hidden');
+  } else if (newState === 'plan_done') {
+    // Stay on planning screen to show planReadyCard
+  } else if (newState === 'idle') {
+    setScreen('home');
+    resetPlanningState();
     toggleModelPicker(true);
     _chatHeaderAgent = '';
-  }
-  // Only hide quota badge when truly idle (no active session)
-  if (newState === 'idle') {
     updateQuotaBadge(null, null, null);
   }
-  // Always clear any lingering progress overlay when switching state
-  showLaunchProgress(false);
 
-  if (newState === 'planning') {
-    modeTag.textContent = '🗺 Planning';
-    modeTag.classList.add('mode-plan');
-  } else if (newState === 'running') {
-    modeTag.textContent = '▶ Running';
-    modeTag.classList.add('mode-run');
-  } else if (newState === 'plan_done') {
-    modeTag.textContent = '✅ Plan ready';
-    modeTag.classList.add('mode-resume');
-  } else {
-    modeTag.classList.add('hidden');
-  }
+  showLaunchProgress(false);
 }
 
 function updateButtons() {
@@ -368,13 +351,12 @@ function updateButtons() {
   const active   = state === 'planning' || state === 'running';
   const planDone = state === 'plan_done';
 
-  $('planBtn').disabled    = active || planDone;
-  $('startBtn').disabled   = active || planDone;
-  $('resumeBtn').disabled  = active || planDone;
-  $('newBtn').disabled     = active || planDone;
-  $('cancelBtn').disabled  = idle || planDone;
-  $('abortBtn').disabled   = idle || planDone;
-  $('execPlanBtn').classList.toggle('hidden', !planDone);
+  if ($('planBtn'))  $('planBtn').disabled  = active || planDone;
+  if ($('startBtn')) $('startBtn').disabled = active || planDone;
+  if ($('cancelBtn')) $('cancelBtn').disabled = idle || planDone;
+  if ($('abortBtn'))  $('abortBtn').disabled  = idle || planDone;
+  if ($('execPlanBtn')) $('execPlanBtn').classList.toggle('hidden', !planDone);
+  updateHomeButtons();
 }
 
 function updateTerminalTitle() {
@@ -417,6 +399,13 @@ const AGENT_INFO = {
     linkText: 'Supported models ↗',
     color: 'var(--purple)',
   },
+  custom: {
+    name: 'Custom (OpenAI-compatible)',
+    desc: 'Any OpenAI-compatible API endpoint: Together, Groq, OpenRouter, local Ollama, etc.',
+    link: 'https://openrouter.ai/keys',
+    linkText: 'OpenRouter keys ↗',
+    color: 'var(--text-muted)',
+  },
 };
 
 function renderAgentCard(agent) {
@@ -432,13 +421,9 @@ function renderAgentCard(agent) {
 // ── Setup hint (first-time) ───────────────────────────────────────────────────
 
 function checkSetupHint() {
-  const hasToken = ($('ghToken')?.value || $('anthropicApiKey')?.value || '').trim();
-  if (!hasToken) {
-    $('setupHint').classList.remove('hidden');
-  } else {
-    $('setupHint').classList.add('hidden');
-  }
+  // Setup hint removed — home screen replaces it
   updateCredentialsBadge();
+  updateHomeButtons();
 }
 
 // Show a "✓ configured" or "⚠ not set" badge on the credentials summary
@@ -552,6 +537,10 @@ function getConfig() {
     firebaseProjectId:    $('firebaseProjectId').value.trim(),
     gcloudKeyFile:        $('gcloudKeyFile').value.trim(),
     firebaseTestDevice:   $('firebaseTestDevice').value.trim(),
+    customApiBase:        $('customApiBase')?.value.trim() || '',
+    customApiKey:         $('customApiKey')?.value.trim() || '',
+    customModel:          $('customModel')?.value.trim() || '',
+    mcpServers:           mcpServers,
   };
 }
 
@@ -595,6 +584,12 @@ function validateConfig() {
     }
     valid = false;
   }
+  if (cfg.agent === 'custom' && (!cfg.customApiBase || !cfg.customApiKey)) {
+    credHint('API Base URL and Key required');
+    if (!cfg.customApiBase) setFieldError('customApiBase', 'API Base URL is required');
+    if (!cfg.customApiKey) setFieldError('customApiKey', 'API Key is required');
+    valid = false;
+  }
   return valid ? cfg : null;
 }
 
@@ -614,6 +609,7 @@ const ALL_FIELDS = [
   'gitUserName','gitUserEmail','flutterVersion','goVersion',
   'firebaseProjectId','gcloudKeyFile','firebaseTestDevice',
   'sessionName','projectPath','task','taskFile',
+  'customApiBase','customApiKey','customModel',
 ];
 const ALL_CHECKBOXES = ['useHostInstructions'];
 
@@ -639,6 +635,8 @@ async function loadForm() {
     const data = await res.json();
     ALL_FIELDS.forEach(id => { const el = $(id); if (el && id in data) el.value = data[id]; });
     ALL_CHECKBOXES.forEach(id => { const el = $(id); if (el && id in data) el.checked = data[id]; });
+    // Load MCP servers
+    if (Array.isArray(data.mcpServers)) { mcpServers = data.mcpServers; renderMcpServers(); }
   } catch (_) {}
 }
 
@@ -738,90 +736,28 @@ function listContainers() {
 }
 
 function renderContainerList(containers) {
+  // Populate hidden containerSelect for backward compat
   const sel = $('containerSelect');
-  const prev = sel.value;
-  sel.innerHTML = '';
-
-  if (!containers || containers.length === 0) {
-    sel.innerHTML = '<option value="">— no running containers —</option>';
-    $('containerInfo').classList.add('hidden');
-    $('switchAgentBar').classList.add('hidden');
-    return;
+  if (sel) {
+    const prev = sel.value;
+    sel.innerHTML = '';
+    if (!containers || containers.length === 0) {
+      sel.innerHTML = '<option value="">— none —</option>';
+    } else {
+      sel.innerHTML = '<option value="">Select…</option>';
+      containers.forEach(c => {
+        const opt = document.createElement('option');
+        opt.value = c.id;
+        opt.dataset.agent = c.agent || 'copilot';
+        opt.textContent = c.sessionName || c.shortId || c.id.slice(0, 12);
+        sel.appendChild(opt);
+      });
+      if (prev && containers.find(c => c.id === prev)) sel.value = prev;
+    }
   }
-
-  sel.innerHTML = '<option value="">Select a container…</option>';
-  containers.forEach(c => {
-    const opt  = document.createElement('option');
-    opt.value  = c.id;
-    opt.dataset.agent = c.agent || 'copilot';
-    // Show: "My Feature  ·  [plan]  office-app" or "copilot-agent-17…  ·  [normal]  …"
-    const label = c.sessionName
-      ? `${c.sessionName}  ·  [${c.mode}]  ${c.project}`
-      : `${c.shortId}  ·  [${c.mode}]  ${c.project}`;
-    opt.textContent = label;
-    sel.appendChild(opt);
-  });
-
-  if (prev && containers.find(c => c.id === prev)) {
-    sel.value = prev;
-    showContainerInfo(containers.find(c => c.id === prev));
-  }
+  // Populate home screen sessions list
+  renderSessionsList(containers);
 }
-
-function showContainerInfo(c) {
-  if (!c) {
-    $('containerInfo').classList.add('hidden');
-    $('switchAgentBar').classList.add('hidden');
-    return;
-  }
-  const stateClass = c.state === 'running' ? 'ci-running' : 'ci-exited';
-  const modeClass  = c.mode === 'plan' ? 'ci-plan' : '';
-  const agentInfo  = AGENT_INFO[c.agent] || { name: c.agent || 'copilot' };
-  const nameHtml   = c.sessionName
-    ? `<span class="ci-session-name">${c.sessionName}</span> <span class="ci-docker-id">${c.shortId}</span>`
-    : `<span class="ci-name">${c.shortId}</span>`;
-  $('containerInfo').innerHTML =
-    `${nameHtml}  ` +
-    `<span class="ci-badge ${stateClass}">${c.state}</span>  ` +
-    (c.mode !== 'normal' ? `<span class="ci-badge ${modeClass}">${c.mode}</span>  ` : '') +
-    `<span class="ci-badge" style="background:var(--surface);border:1px solid var(--border)">${agentInfo.name}</span>` +
-    `<br><span class="ci-status-text">${c.status}</span>`;
-  $('containerInfo').classList.remove('hidden');
-
-  // Sync agent dropdown to match this container's agent
-  if (c.agent && $('agent').value !== c.agent) {
-    $('agent').value = c.agent;
-    updateAgentFields(c.agent);
-  }
-
-  // Show switch-agent bar
-  $('switchAgentSelect').value = c.agent || 'copilot';
-  $('switchAgentBar').classList.remove('hidden');
-}
-
-$('containerSelect').addEventListener('change', ev => {
-  const id = ev.target.value;
-  if (!id) {
-    $('containerInfo').classList.add('hidden');
-    $('switchAgentBar').classList.add('hidden');
-    return;
-  }
-  // Get agent from option data attribute
-  const opt = ev.target.options[ev.target.selectedIndex];
-  const agent = opt?.dataset?.agent || 'copilot';
-  showContainerInfo({ id, state: 'running', mode: 'normal', name: id.slice(0, 12), status: '', agent });
-
-  // Attach log stream
-  if (state === 'idle' || state === 'plan_done') {
-    clearTerminal(false);
-    wsSend({ type: 'subscribe_logs', containerId: id });
-    activeContainerId = id;
-    setActiveContainerLabel(id);
-    $('cancelBtn').disabled = false;
-    $('abortBtn').disabled  = false;
-    $('terminalTitle').textContent = 'Log View — ' + id.slice(0, 12);
-  }
-});
 
 // ── Action buttons ────────────────────────────────────────────────────────────
 
@@ -845,25 +781,6 @@ $('startBtn').addEventListener('click', () => {
   clearTerminal();
   term.writeln('\x1b[32m[start] Launching agent…\x1b[0m\r\n');
   wsSend({ type: 'start_container', config: cfg, mode: 'normal' });
-});
-
-$('resumeBtn').addEventListener('click', () => {
-  const cfg = validateConfig();
-  if (!cfg) return;
-  lastConfig = cfg;
-  clearTerminal();
-  term.writeln('\x1b[34m[resume] Resuming last session…\x1b[0m\r\n');
-  wsSend({ type: 'start_container', config: cfg, mode: 'resume' });
-});
-
-$('newBtn').addEventListener('click', () => {
-  if (!confirm('This will wipe all saved session state. Continue?')) return;
-  const cfg = validateConfig();
-  if (!cfg) return;
-  lastConfig = cfg;
-  clearTerminal();
-  term.writeln('\x1b[33m[new session] Clearing state and starting fresh…\x1b[0m\r\n');
-  wsSend({ type: 'start_container', config: cfg, mode: 'new' });
 });
 
 $('cancelBtn').addEventListener('click', () => {
@@ -908,195 +825,382 @@ function clearTerminal(resetBuffer = true) {
   if (resetBuffer) logBuffer = '';
 }
 
-// ── Chat UI helpers ───────────────────────────────────────────────────────────
-
-/**
- * Append a bubble to the chat panel.
- * type: 'agent' | 'user' | 'system'
- * Returns the bubble element.
- */
-function appendChatBubble(type, text = '') {
-  const messages = $('chatMessages');
-  const wrap = document.createElement('div');
-  wrap.className = `chat-bubble chat-bubble-${type}`;
-
-  if (type === 'agent' || type === 'user') {
-    // Header row: avatar + label + timestamp
-    const header = document.createElement('div');
-    header.className = 'bubble-header';
-
-    const avatar = document.createElement('span');
-    avatar.className = 'bubble-avatar';
-    avatar.textContent = type === 'agent' ? '🤖' : '👤';
-
-    const label = document.createElement('span');
-    label.className = 'bubble-label';
-    label.textContent = type === 'agent'
-      ? (lastConfig?.agent ? lastConfig.agent.charAt(0).toUpperCase() + lastConfig.agent.slice(1) : 'Agent')
-      : 'You';
-
-    const ts = document.createElement('span');
-    ts.className = 'bubble-ts';
-    ts.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
-    header.appendChild(avatar);
-    header.appendChild(label);
-    header.appendChild(ts);
-    wrap.appendChild(header);
-  }
-
-  if (type === 'agent') {
-    // Streaming placeholder — replaced by markdown on chat_message_end
-    const textEl = document.createElement('div');
-    textEl.className = 'bubble-text bubble-streaming';
-    if (text) textEl.textContent = text;
-    wrap.appendChild(textEl);
-  } else if (type === 'user') {
-    const textEl = document.createElement('div');
-    textEl.className = 'bubble-text';
-    textEl.textContent = text;
-    wrap.appendChild(textEl);
-  } else {
-    // system
-    const textEl = document.createElement('span');
-    textEl.className = 'bubble-text';
-    // Support emoji + markdown bold in system messages
-    textEl.innerHTML = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-    wrap.appendChild(textEl);
-  }
-
-  messages.appendChild(wrap);
-  return wrap;
-}
-
-/** Section metadata for coloring agent response headings */
-const SECTION_STYLES = {
-  'project overview':       { icon: '📐', cls: 'section-blue' },
-  'requirements':           { icon: '📋', cls: 'section-blue' },
-  'requirements analysis':  { icon: '📋', cls: 'section-blue' },
-  'gaps':                   { icon: '⚠️',  cls: 'section-yellow' },
-  'gaps & ambiguities':     { icon: '⚠️',  cls: 'section-yellow' },
-  'ambiguities':            { icon: '⚠️',  cls: 'section-yellow' },
-  'technical risks':        { icon: '🔥', cls: 'section-red' },
-  'risks':                  { icon: '🔥', cls: 'section-red' },
-  'clarifying questions':   { icon: '❓', cls: 'section-purple' },
-  'questions':              { icon: '❓', cls: 'section-purple' },
-  'suggestions':            { icon: '💡', cls: 'section-green' },
-  'recommendations':        { icon: '💡', cls: 'section-green' },
-  'milestones':             { icon: '🗺',  cls: 'section-green' },
-  'implementation plan':    { icon: '🗺',  cls: 'section-green' },
-  'plan':                   { icon: '🗺',  cls: 'section-green' },
-  'next steps':             { icon: '▶️',  cls: 'section-green' },
-};
-
-function getSectionStyle(headingText) {
-  const lower = headingText.toLowerCase().trim();
-  for (const [key, val] of Object.entries(SECTION_STYLES)) {
-    if (lower.includes(key)) return val;
-  }
-  return null;
-}
+// ── Planning wizard helpers ──────────────────────────────────────────────────
 
 // Initialise marked once with global defaults
 marked.use({ breaks: true, gfm: true });
 
-/**
- * Render accumulated agent text as styled markdown.
- * streaming=true: update in-place without removing the current bubble element id.
- */
-function renderBubbleMarkdown(bubble, streaming = false) {
-  if (!bubble._rawText) return;
-  try {
-    // Build a fresh Marked instance with our custom renderer so global state is not mutated
-    const renderer = {
-      heading({ text, depth }) {
-        const style = getSectionStyle(text);
-        const tag = `h${Math.min(depth, 4)}`;
-        if (style) {
-          return `<${tag} class="section-heading ${style.cls}">${style.icon} ${text}</${tag}>`;
-        }
-        return `<${tag}>${text}</${tag}>`;
-      },
-      code({ text, lang }) {
-        const langLabel = lang ? `<span class="code-lang">${lang}</span>` : '';
-        const escaped = (text || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-        return `<div class="code-block">` +
-          `<div class="code-block-header">${langLabel}<button class="code-copy-btn" onclick="copyCode(this)">Copy</button></div>` +
-          `<pre><code>${escaped}</code></pre>` +
-          `</div>`;
-      },
-    };
+const PLANNING_STEPS = [
+  { id: 'requirements', label: 'Requirements',      icon: '📋' },
+  { id: 'codebase',     label: 'Codebase Review',   icon: '🔍' },
+  { id: 'gaps',         label: 'Gaps & Unknowns',   icon: '❓' },
+  { id: 'approach',     label: 'Technical Approach', icon: '🏗️' },
+  { id: 'testing',      label: 'Testing Strategy',   icon: '🧪' },
+  { id: 'plan',         label: 'Final Plan',         icon: '✅' },
+];
 
-    const html = marked.parse(bubble._rawText, { renderer });
-    const existing = bubble.querySelector('.bubble-markdown');
-    if (existing) {
-      existing.innerHTML = html;
-    } else {
-      const div = document.createElement('div');
-      div.className = 'bubble-markdown';
-      div.innerHTML = html;
-      const streamEl = bubble.querySelector('.bubble-streaming');
-      if (streamEl) streamEl.replaceWith(div);
-      else bubble.appendChild(div);
+/** Parse a complete agent turn into structured blocks */
+function parseAgentTurn(text) {
+  const result = { step: null, stepDone: false, analysis: [], question: null, plan: null };
+
+  const stepMatch = text.match(/<STEP:(\w+)>/);
+  if (stepMatch) result.step = stepMatch[1];
+
+  const stepDoneMatch = text.match(/<STEP_DONE:(\w+)>/);
+  if (stepDoneMatch) { result.step = stepDoneMatch[1]; result.stepDone = true; }
+
+  // Extract all ANALYSIS blocks
+  const analysisRe = /<ANALYSIS title="([^"]*)">([\s\S]*?)<\/ANALYSIS>/g;
+  let m;
+  while ((m = analysisRe.exec(text)) !== null) {
+    result.analysis.push({ title: m[1], body: m[2].trim() });
+  }
+
+  // Extract QUESTION block (JSON)
+  const questionMatch = text.match(/<QUESTION>([\s\S]*?)<\/QUESTION>/);
+  if (questionMatch) {
+    try { result.question = JSON.parse(questionMatch[1].trim()); }
+    catch (e) { console.warn('[wizard] bad QUESTION JSON:', e); }
+  }
+
+  // Extract PLAN block
+  const planMatch = text.match(/<PLAN_START>([\s\S]*?)<PLAN_END>/);
+  if (planMatch) result.plan = planMatch[1].trim();
+
+  return result;
+}
+
+/** Process a completed agent turn — dispatch to wizard UI zones */
+function processAgentTurn(text) {
+  const parsed = parseAgentTurn(text);
+
+  if (parsed.step) {
+    updateProgressRail(parsed.step, parsed.stepDone);
+  }
+
+  parsed.analysis.forEach(a => {
+    appendAnalysisItem(a.title, a.body, planningState.step);
+  });
+
+  if (parsed.plan) {
+    showPlanReady(parsed.plan);
+    return;
+  }
+
+  if (parsed.stepDone) {
+    showStepDone(parsed.step);
+    return;
+  }
+
+  if (parsed.question) {
+    renderQuestionCard(parsed.question);
+    return;
+  }
+
+  // Nothing structured — hide thinking
+  showThinking(false);
+}
+
+/** Populate the progress rail with step dots */
+function initProgressRail() {
+  const ol = $('progressSteps');
+  if (!ol) return;
+  ol.innerHTML = '';
+  PLANNING_STEPS.forEach(step => {
+    const li = document.createElement('li');
+    li.className = 'progress-step';
+    li.id = `progress-${step.id}`;
+    li.innerHTML = `<span class="progress-step-dot"></span><span class="progress-step-label">${step.icon} ${step.label}</span>`;
+    ol.appendChild(li);
+  });
+  updateProgressRail(planningState.step, false);
+}
+
+/** Update progress rail active/done states */
+function updateProgressRail(stepId, done) {
+  if (!stepId) return;
+  planningState.step = stepId;
+  if (done && !planningState.completedSteps.includes(stepId)) {
+    planningState.completedSteps.push(stepId);
+  }
+  PLANNING_STEPS.forEach(step => {
+    const el = $(`progress-${step.id}`);
+    if (!el) return;
+    el.classList.remove('is-active', 'is-done');
+    if (planningState.completedSteps.includes(step.id)) {
+      el.classList.add('is-done');
+    } else if (step.id === stepId && !done) {
+      el.classList.add('is-active');
     }
-  } catch (_) {
-    // fallback: just show raw text
-    const el = bubble.querySelector('.bubble-streaming') || bubble.querySelector('.bubble-markdown');
-    if (el) el.textContent = bubble._rawText;
+  });
+}
+
+/** Show/hide thinking spinner */
+function showThinking(visible) {
+  const card = $('thinkingCard');
+  if (card) card.classList.toggle('hidden', !visible);
+  if (visible) {
+    $('questionCard')?.classList.add('hidden');
+    $('stepDoneCard')?.classList.add('hidden');
   }
 }
 
-function copyCode(btn) {
-  const code = btn.closest('.code-block').querySelector('code').textContent;
-  navigator.clipboard.writeText(code).then(() => {
-    btn.textContent = 'Copied!';
-    setTimeout(() => { btn.textContent = 'Copy'; }, 2000);
-  }).catch(() => {});
+/** Render a typed question card in the center pane */
+function renderQuestionCard(question) {
+  const card = $('questionCard');
+  if (!card || !question) return;
+
+  planningState.currentQuestion = question;
+  const stepLabel = PLANNING_STEPS.find(s => s.id === planningState.step)?.label || planningState.step;
+  const type = question.type || 'choice';
+
+  let optionsHtml = '';
+  if (type === 'choice' || type === 'confirm' || type === 'multi') {
+    optionsHtml = (question.options || []).map((opt, i) => {
+      const isRec = opt.recommended;
+      const recBadge = isRec ? '<span class="qc-recommended-badge">Recommended</span>' : '';
+      const multiCls = type === 'multi' ? ' is-multi' : '';
+      const val = (opt.value || opt.label || '').replace(/"/g, '&quot;');
+      return `
+        <div class="qc-option${multiCls}${isRec ? ' is-recommended' : ''}" data-index="${i}" data-value="${val}">
+          <span class="qc-option-radio"></span>
+          <div class="qc-option-body">
+            <span class="qc-option-label">${opt.label || opt.value || ''}</span>
+            ${opt.rationale ? `<span class="qc-option-rationale">${opt.rationale}</span>` : ''}
+            ${recBadge}
+          </div>
+        </div>`;
+    }).join('');
+  } else if (type === 'text' || type === 'number') {
+    const inputType = type === 'number' ? 'number' : 'text';
+    const defaultVal = question.default || '';
+    optionsHtml = `
+      <input class="qc-input-field" type="${inputType}" placeholder="${question.placeholder || 'Type your answer...'}" value="${defaultVal}">
+      ${defaultVal ? `<div class="qc-default-hint">Default: ${defaultVal}</div>` : ''}`;
+  }
+
+  const recOption = (question.options || []).find(o => o.recommended);
+  card.innerHTML = `
+    <div class="qc-meta">
+      <span class="qc-step-tag">${stepLabel}</span>
+    </div>
+    <h3 class="qc-title">${question.title || question.text || 'Question'}</h3>
+    ${question.context ? `<p class="qc-context">${question.context}</p>` : ''}
+    <div class="qc-options">${optionsHtml}</div>
+    <div class="qc-footer">
+      ${recOption ? '<button class="qc-btn qc-btn-recommended" data-action="use-rec">Use Recommendation</button>' : ''}
+      <button class="qc-btn qc-btn-primary" data-action="submit">Confirm</button>
+      <button class="qc-btn qc-btn-ghost" data-action="skip">Skip</button>
+    </div>`;
+
+  // Wire option clicks
+  card.querySelectorAll('.qc-option').forEach(opt => {
+    opt.addEventListener('click', () => {
+      if (type === 'multi') {
+        opt.classList.toggle('is-selected');
+      } else {
+        card.querySelectorAll('.qc-option').forEach(o => o.classList.remove('is-selected'));
+        opt.classList.add('is-selected');
+      }
+    });
+  });
+
+  // Wire footer buttons
+  card.querySelector('[data-action="submit"]')?.addEventListener('click', () => submitQuestionAnswer());
+  card.querySelector('[data-action="use-rec"]')?.addEventListener('click', () => submitQuestionAnswer(true));
+  card.querySelector('[data-action="skip"]')?.addEventListener('click', () => submitQuestionAnswer(false, true));
+
+  card.classList.remove('hidden');
+  $('thinkingCard')?.classList.add('hidden');
+  $('stepDoneCard')?.classList.add('hidden');
 }
 
-function scrollChatToBottom() {
-  const el = $('chatMessages');
-  if (el) el.scrollTop = el.scrollHeight;
+/** Submit the user's answer for the current question card */
+function submitQuestionAnswer(useRec = false, skip = false) {
+  const q = planningState.currentQuestion;
+  if (!q) return;
+
+  const card = $('questionCard');
+  const type = q.type || 'choice';
+  let answerText = '';
+  let answerLabel = '';
+
+  if (skip) {
+    answerText = 'Skipping this question — use your best judgment.';
+    answerLabel = 'Skipped';
+  } else if (useRec) {
+    const rec = (q.options || []).find(o => o.recommended);
+    answerText = `I'll go with your recommendation: ${rec?.label || rec?.value || 'recommended option'}.`;
+    answerLabel = rec?.label || 'Recommended';
+  } else if (type === 'text' || type === 'number') {
+    const input = card?.querySelector('.qc-input-field');
+    answerText = input?.value || q.default || '';
+    answerLabel = answerText || '(empty)';
+    if (!answerText.trim()) { toast('Please enter a value', 'warning'); return; }
+  } else if (type === 'multi') {
+    const selected = card?.querySelectorAll('.qc-option.is-selected') || [];
+    if (!selected.length) { toast('Select at least one option', 'warning'); return; }
+    const labels = [...selected].map(el => el.querySelector('.qc-option-label')?.textContent || el.dataset.value);
+    answerText = `Selected: ${labels.join(', ')}`;
+    answerLabel = labels.join(', ');
+  } else {
+    const selected = card?.querySelector('.qc-option.is-selected');
+    if (!selected) { toast('Select an option', 'warning'); return; }
+    answerLabel = selected.querySelector('.qc-option-label')?.textContent || selected.dataset.value;
+    answerText = answerLabel;
+  }
+
+  // Record decision in sidebar
+  appendDecisionChip(q.id || q.title, q.title || q.text, answerLabel, planningState.step);
+
+  // Send answer to agent
+  wsSend({ type: 'chat_input', text: answerText });
+
+  // Hide question card, show thinking
+  card?.classList.add('hidden');
+  planningState.currentQuestion = null;
+  showThinking(true);
 }
 
-function showChatTyping() {
-  $('chatTyping').classList.remove('hidden');
-  const btn = $('nextPhaseBtn');
-  if (btn) btn.disabled = true;
+/** Add a collapsible analysis card to the analysis drawer */
+function appendAnalysisItem(title, body, stepId) {
+  const list = $('analysisList');
+  if (!list) return;
+
+  const empty = list.querySelector('.analysis-empty');
+  if (empty) empty.remove();
+
+  const stepLabel = PLANNING_STEPS.find(s => s.id === stepId)?.label || stepId;
+
+  const item = document.createElement('div');
+  item.className = 'analysis-item is-open';
+
+  const header = document.createElement('div');
+  header.className = 'analysis-item-header';
+  header.innerHTML = `
+    <span class="analysis-item-caret">▼</span>
+    <span class="analysis-item-title">${title}</span>
+    <span class="analysis-item-step">${stepLabel}</span>`;
+
+  const bodyEl = document.createElement('div');
+  bodyEl.className = 'analysis-item-body';
+  try { bodyEl.innerHTML = marked.parse(body); }
+  catch (e) { bodyEl.textContent = body; }
+
+  header.addEventListener('click', () => item.classList.toggle('is-open'));
+
+  item.appendChild(header);
+  item.appendChild(bodyEl);
+  list.prepend(item);
+
+  planningState.analysis.push({ title, body, step: stepId });
+  const count = $('analysisCount');
+  if (count) count.textContent = planningState.analysis.length;
 }
 
-function hideChatTyping() {
-  $('chatTyping').classList.add('hidden');
-  const btn = $('nextPhaseBtn');
-  if (btn) btn.disabled = false;
+/** Add a decision chip to the decisions sidebar */
+function appendDecisionChip(id, title, answer, stepId) {
+  const list = $('decisionsList');
+  if (!list) return;
+
+  const empty = list.querySelector('.decisions-empty');
+  if (empty) empty.remove();
+
+  const stepLabel = PLANNING_STEPS.find(s => s.id === stepId)?.label || stepId;
+
+  const chip = document.createElement('div');
+  chip.className = 'decision-chip';
+  chip.innerHTML = `
+    <div class="decision-step">${stepLabel}</div>
+    <div class="decision-title">${title}</div>
+    <div class="decision-answer">${answer}</div>`;
+
+  list.prepend(chip);
+  planningState.decisions.push({ id, title, answer, step: stepId });
+  const count = $('decisionsCount');
+  if (count) count.textContent = planningState.decisions.length;
+}
+
+/** Show the "step complete" card with advance button */
+function showStepDone(stepId) {
+  const stepLabel = PLANNING_STEPS.find(s => s.id === stepId)?.label || stepId;
+  const card = $('stepDoneCard');
+  if (!card) return;
+
+  const body = card.querySelector('.sd-body');
+  if (body) body.innerHTML = `<strong>${stepLabel}</strong> is complete. Ready to move on?`;
+
+  card.classList.remove('hidden');
+  $('questionCard')?.classList.add('hidden');
+  $('thinkingCard')?.classList.add('hidden');
+}
+
+/** Show the final plan card */
+function showPlanReady(planMarkdown) {
+  const card = $('planReadyCard');
+  if (!card) return;
+
+  const body = card.querySelector('.pr-body');
+  if (body) {
+    try { body.innerHTML = marked.parse(planMarkdown); }
+    catch (e) { body.textContent = planMarkdown; }
+  }
+
+  card.classList.remove('hidden');
+  $('questionCard')?.classList.add('hidden');
+  $('stepDoneCard')?.classList.add('hidden');
+  $('thinkingCard')?.classList.add('hidden');
+}
+
+/** Reset wizard state and clear all UI zones */
+function resetPlanningState() {
+  planningState = {
+    decisions: [], analysis: [], currentQuestion: null,
+    step: 'requirements', completedSteps: [], agentTurnBuffer: '',
+  };
+  const dl = $('decisionsList');
+  if (dl) dl.innerHTML = '<div class="decisions-empty">No decisions yet</div>';
+  const al = $('analysisList');
+  if (al) al.innerHTML = '<div class="analysis-empty">No analysis yet</div>';
+  const dc = $('decisionsCount');
+  if (dc) dc.textContent = '0';
+  const ac = $('analysisCount');
+  if (ac) ac.textContent = '0';
+  $('questionCard')?.classList.add('hidden');
+  $('stepDoneCard')?.classList.add('hidden');
+  $('planReadyCard')?.classList.add('hidden');
+  showThinking(false);
+}
+
+/** Send freeform text via the chat escape hatch */
+function sendChatText(text, clearInput = false) {
+  if (!text.trim()) return false;
+  wsSend({ type: 'chat_input', text });
+  if (clearInput) {
+    const input = $('chatInput');
+    if (input) { input.value = ''; input.style.height = 'auto'; }
+  }
+  showThinking(true);
+  return true;
 }
 
 function sendChatMessage() {
   const input = $('chatInput');
   const text  = input.value;
   if (!text.trim()) return;
-
-  // Show user bubble
-  appendChatBubble('user', text);
-  scrollChatToBottom();
-
-  // Send to server
-  wsSend({ type: 'chat_input', text });
-
-  input.value = '';
-  input.style.height = 'auto';
-  showChatTyping();
+  sendChatText(text, true);
 }
 
-$('chatSendBtn').addEventListener('click', sendChatMessage);
+function resizeChatInput() {
+  const input = $('chatInput');
+  if (!input) return;
+  input.style.height = 'auto';
+  input.style.height = Math.min(input.scrollHeight, 180) + 'px';
+}
 
-$('nextPhaseBtn').addEventListener('click', () => {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: 'advance_step' }));
-    const btn = $('nextPhaseBtn');
-    if (btn) btn.disabled = true;
-  }
-});
+// ── Wizard event handlers ────────────────────────────────────────────────────
+
+$('chatSendBtn').addEventListener('click', sendChatMessage);
 
 $('chatInput').addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) {
@@ -1105,11 +1209,235 @@ $('chatInput').addEventListener('keydown', e => {
   }
 });
 
-// Auto-resize textarea
-$('chatInput').addEventListener('input', function () {
-  this.style.height = 'auto';
-  this.style.height = Math.min(this.scrollHeight, 180) + 'px';
+$('chatInput').addEventListener('input', resizeChatInput);
+
+$('advanceStepBtn').addEventListener('click', () => {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    wsSend({ type: 'advance_step' });
+    $('stepDoneCard')?.classList.add('hidden');
+    showThinking(true);
+  }
 });
+
+// ── Home screen: agent cards ─────────────────────────────────────────────────
+
+function renderAgentCards() {
+  const grid = $('agentCards');
+  if (!grid) return;
+  grid.innerHTML = '';
+  const currentAgent = $('agent')?.value || 'copilot';
+
+  const agents = [
+    { key: 'copilot', icon: '🤖', keyField: 'ghToken' },
+    { key: 'claude',  icon: '🟠', keyField: 'anthropicApiKey' },
+    { key: 'gemini',  icon: '🔵', keyField: 'geminiApiKey' },
+    { key: 'aider',   icon: '🛠️', keyField: 'openaiApiKey' },
+    { key: 'custom',  icon: '🔧', keyField: 'customApiKey' },
+  ];
+
+  agents.forEach(({ key, icon, keyField }) => {
+    const info = AGENT_INFO[key];
+    if (!info) return;
+    const configured = $(keyField)?.value?.trim()?.length > 0;
+    const card = document.createElement('div');
+    card.className = `agent-pick-card${key === currentAgent ? ' is-selected' : ''}`;
+    card.dataset.agent = key;
+    card.innerHTML = `
+      <div class="agent-pick-icon">${icon}</div>
+      <div class="agent-pick-name">${info.name.split('(')[0].split(' —')[0].trim()}</div>
+      <div class="agent-pick-badge ${configured ? '' : 'not-configured'}">${configured ? '✓ Ready' : 'Setup needed'}</div>`;
+
+    card.addEventListener('click', () => {
+      grid.querySelectorAll('.agent-pick-card').forEach(c => c.classList.remove('is-selected'));
+      card.classList.add('is-selected');
+      $('agent').value = key;
+      updateAgentFields(key);
+      saveForm();
+      updateHomeButtons();
+    });
+    grid.appendChild(card);
+  });
+}
+
+function updateHomeButtons() {
+  const hasProject = ($('projectPath')?.value || '').trim().length > 0;
+  const agent = $('agent')?.value || 'copilot';
+  const keyMap = { copilot: 'ghToken', claude: 'anthropicApiKey', gemini: 'geminiApiKey', aider: 'openaiApiKey', custom: 'customApiKey' };
+  const hasKey = ($(keyMap[agent])?.value || '').trim().length > 0;
+  const canStart = hasProject && hasKey && state === 'idle';
+  if ($('planBtn'))  $('planBtn').disabled  = !canStart;
+  if ($('startBtn')) $('startBtn').disabled = !canStart;
+}
+
+// ── Home screen: sessions list ───────────────────────────────────────────────
+
+function renderSessionsList(containers) {
+  const list = $('sessionsList');
+  if (!list) return;
+  if (!containers || containers.length === 0) {
+    list.innerHTML = '<div class="sessions-empty">No active sessions</div>';
+    return;
+  }
+  list.innerHTML = '';
+  containers.forEach(c => {
+    const displayName = c.sessionName || c.shortId || c.id?.slice(0, 12) || '?';
+    const item = document.createElement('div');
+    item.className = 'session-item';
+    const statusColor = c.state === 'running' ? 'var(--green)' : 'var(--text-dim)';
+    const agentInfo = AGENT_INFO[c.agent] || { name: c.agent || 'Agent' };
+    item.innerHTML = `
+      <span style="color:${statusColor};font-size:10px">●</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:500;color:var(--text)">${displayName}</div>
+        <div style="font-size:11px;color:var(--text-muted)">${c.project || ''} · ${agentInfo.name.split(' ')[0]} · ${c.status || c.state || ''}</div>
+      </div>
+      <span style="font-size:10px;color:var(--text-dim)">${c.mode || ''}</span>`;
+    item.addEventListener('click', () => {
+      setScreen('execution');
+      clearTerminal(false);
+      wsSend({ type: 'subscribe_logs', containerId: c.id });
+      activeContainerId = c.id;
+      setActiveContainerLabel(c.id);
+      $('cancelBtn').disabled = false;
+      $('abortBtn').disabled  = false;
+      $('terminalTitle').textContent = 'Log View — ' + (c.sessionName || c.shortId || c.id.slice(0, 12));
+    });
+    list.appendChild(item);
+  });
+}
+
+// ── Home button (back to home) ───────────────────────────────────────────────
+
+$('homeBtn')?.addEventListener('click', () => {
+  if (state === 'planning' || state === 'running') {
+    if (!confirm('Return to home? Active session continues in background.')) return;
+  }
+  setScreen('home');
+});
+
+// ── Settings drawer ──────────────────────────────────────────────────────────
+
+$('settingsBtn')?.addEventListener('click', () => $('settingsDrawer')?.classList.remove('hidden'));
+$('closeSettingsBtn')?.addEventListener('click', () => $('settingsDrawer')?.classList.add('hidden'));
+$('settingsBackdrop')?.addEventListener('click', () => $('settingsDrawer')?.classList.add('hidden'));
+
+document.querySelectorAll('.drawer-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.drawer-tab').forEach(t => t.classList.remove('is-active'));
+    document.querySelectorAll('.drawer-tab-panel').forEach(p => p.classList.remove('is-active'));
+    tab.classList.add('is-active');
+    document.querySelector(`[data-panel="${tab.dataset.tab}"]`)?.classList.add('is-active');
+  });
+});
+
+// ── MCP Server config ────────────────────────────────────────────────────────
+
+let mcpServers = [];
+
+function renderMcpServers() {
+  const list = $('mcpServerList');
+  if (!list) return;
+  list.innerHTML = '';
+  mcpServers.forEach((srv, idx) => {
+    const entry = document.createElement('div');
+    entry.className = 'mcp-server-entry';
+    entry.innerHTML = `
+      <div class="mcp-server-header">
+        <input class="mcp-server-name" type="text" placeholder="Server name" value="${srv.name || ''}">
+        <button class="mcp-server-remove btn btn-ghost btn-xs">✕</button>
+      </div>
+      <label class="field-label">Transport</label>
+      <select class="mcp-server-transport input-field">
+        <option value="stdio" ${srv.transport !== 'sse' ? 'selected' : ''}>stdio (command)</option>
+        <option value="sse" ${srv.transport === 'sse' ? 'selected' : ''}>SSE (URL)</option>
+      </select>
+      <div class="mcp-stdio-fields" ${srv.transport === 'sse' ? 'style="display:none"' : ''}>
+        <label class="field-label">Command</label>
+        <input class="mcp-server-command input-field" type="text" placeholder="npx -y @modelcontextprotocol/server-filesystem" value="${srv.command || ''}">
+        <label class="field-label">Args (space-separated)</label>
+        <input class="mcp-server-args input-field" type="text" placeholder="/path/to/dir" value="${srv.args || ''}">
+      </div>
+      <div class="mcp-sse-fields" ${srv.transport !== 'sse' ? 'style="display:none"' : ''}>
+        <label class="field-label">URL</label>
+        <input class="mcp-server-url input-field" type="text" placeholder="http://localhost:8080/sse" value="${srv.url || ''}">
+      </div>
+      <label class="field-label">Env (KEY=VALUE, comma-separated)</label>
+      <input class="mcp-server-env input-field" type="text" placeholder="API_KEY=xxx" value="${srv.env || ''}">`;
+
+    // Wire transport toggle
+    const transportSel = entry.querySelector('.mcp-server-transport');
+    transportSel.addEventListener('change', () => {
+      entry.querySelector('.mcp-stdio-fields').style.display = transportSel.value === 'sse' ? 'none' : '';
+      entry.querySelector('.mcp-sse-fields').style.display = transportSel.value === 'sse' ? '' : 'none';
+      saveMcpConfig();
+    });
+
+    // Wire remove
+    entry.querySelector('.mcp-server-remove').addEventListener('click', () => {
+      mcpServers.splice(idx, 1);
+      renderMcpServers();
+      saveMcpConfig();
+    });
+
+    // Auto-save on change
+    entry.querySelectorAll('input, select').forEach(el => {
+      el.addEventListener('change', () => syncMcpEntry(entry, idx));
+      el.addEventListener('input', () => syncMcpEntry(entry, idx));
+    });
+
+    list.appendChild(entry);
+  });
+}
+
+function syncMcpEntry(entry, idx) {
+  mcpServers[idx] = {
+    name: entry.querySelector('.mcp-server-name')?.value || '',
+    transport: entry.querySelector('.mcp-server-transport')?.value || 'stdio',
+    command: entry.querySelector('.mcp-server-command')?.value || '',
+    args: entry.querySelector('.mcp-server-args')?.value || '',
+    url: entry.querySelector('.mcp-server-url')?.value || '',
+    env: entry.querySelector('.mcp-server-env')?.value || '',
+  };
+  saveMcpConfig();
+}
+
+function saveMcpConfig() {
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(() => {
+    fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mcpServers }),
+    }).catch(() => {});
+  }, 800);
+}
+
+$('addMcpServerBtn')?.addEventListener('click', () => {
+  mcpServers.push({ name: '', transport: 'stdio', command: '', args: '', url: '', env: '' });
+  renderMcpServers();
+  saveMcpConfig();
+});
+
+// ── Project stats ────────────────────────────────────────────────────────────
+
+async function fetchProjectStats() {
+  const path = ($('projectPath')?.value || '').trim();
+  const el = $('projectStats');
+  if (!path || !el) { if (el) el.classList.add('hidden'); return; }
+  try {
+    const res = await fetch(`/api/project/stats?path=${encodeURIComponent(path)}`);
+    const data = await res.json();
+    if (data.exists) {
+      el.textContent = `${data.totalFiles} files${data.truncated ? '+' : ''} · ${(data.languages || []).join(', ') || 'unknown'}`;
+      el.classList.remove('hidden');
+    } else {
+      el.classList.add('hidden');
+    }
+  } catch { if (el) el.classList.add('hidden'); }
+}
+
+$('projectPath')?.addEventListener('blur', () => { fetchProjectStats(); updateHomeButtons(); });
+$('projectPath')?.addEventListener('input', () => updateHomeButtons());
 
 // ── Dev logs panel ────────────────────────────────────────────────────────────
 // Logs are ALWAYS captured in the background; the panel just shows/hides them.
@@ -1350,13 +1678,6 @@ const AGENT_ICONS = {
   copilot: '🤖', claude: '🟠', gemini: '🔵', aider: '🛠️'
 };
 
-const PLANNING_STEPS = [
-  { id: 'requirements', label: 'Requirements',      icon: '📋' },
-  { id: 'codebase',     label: 'Codebase Review',   icon: '🔍' },
-  { id: 'gaps',         label: 'Gaps & Unknowns',   icon: '❓' },
-  { id: 'approach',     label: 'Technical Approach', icon: '🏗️' },
-  { id: 'plan',         label: 'Final Plan',         icon: '✅' },
-];
 
 let _chatHeaderAgent = '';
 let _headerModels    = [];  // [{id, name}] for the current agent
@@ -1377,7 +1698,7 @@ function updateChatHeader(agent, model) {
     });
   }
   updateQuotaBadge(null, null, null);
-  initPlanStepper();
+  initProgressRail();
 }
 
 function toggleModelPicker(forceClose) {
@@ -1440,64 +1761,6 @@ function syncHeaderModelSelect() {
 // Close picker when clicking outside
 document.addEventListener('click', () => toggleModelPicker(true));
 
-// ── Planning stepper ──────────────────────────────────────────────────────────
-
-function initPlanStepper() {
-  const stepper = $('planStepper');
-  const track   = $('planStepperTrack');
-  if (!stepper || !track) return;
-  track.innerHTML = '';
-  PLANNING_STEPS.forEach(step => {
-    const el = document.createElement('div');
-    el.className = 'ps-step ps-pending';
-    el.id = `ps-${step.id}`;
-    el.dataset.label = step.label;
-    el.innerHTML = `<span class="ps-icon"></span>`;
-    track.appendChild(el);
-  });
-  stepper.classList.remove('hidden');
-}
-
-function updatePlanStep(stepId, done) {
-  // Track current active step for the next-phase button
-  if (!done) currentPlanStep = stepId;
-  // Mark all steps before this one as done, set this as active or done
-  let found = false;
-  PLANNING_STEPS.forEach(step => {
-    const el = $(`ps-${step.id}`);
-    if (!el) return;
-    if (step.id === stepId) {
-      found = true;
-      el.classList.remove('ps-pending', 'ps-active', 'ps-done');
-      el.classList.add(done ? 'ps-done' : 'ps-active');
-    } else if (!found) {
-      el.classList.remove('ps-pending', 'ps-active');
-      el.classList.add('ps-done');
-    }
-  });
-}
-
-function updateNextPhaseBtn() {
-  const btn = $('nextPhaseBtn');
-  const nameEl = $('nextPhaseName');
-  if (!btn || !nameEl) return;
-  const idx = PLANNING_STEPS.findIndex(s => s.id === currentPlanStep);
-  const next = PLANNING_STEPS[idx + 1];
-  if (!next || state !== 'planning') {
-    btn.classList.add('hidden');
-    return;
-  }
-  nameEl.textContent = next.label;
-  btn.classList.remove('hidden');
-}
-
-function hidePlanStepper() {
-  const stepper = $('planStepper');
-  if (stepper) stepper.classList.add('hidden');
-  const btn = $('nextPhaseBtn');
-  if (btn) btn.classList.add('hidden');
-  currentPlanStep = 'requirements';
-}
 
 function updateQuotaBadge(remaining, limit, provider, reset) {
   const badge = $('quotaBadge');
@@ -1710,19 +1973,6 @@ $('agent').addEventListener('change', () => {
   updateCredentialsBadge();
 });
 
-// ── Switch Agent button ────────────────────────────────────────────────────────
-$('switchAgentBtn').addEventListener('click', () => {
-  const newAgent = $('switchAgentSelect').value;
-  $('agent').value = newAgent;
-  updateAgentFields(newAgent);
-  saveForm();
-  const info = AGENT_INFO[newAgent] || { name: newAgent };
-  toast(`Agent switched to ${info.name} — update API key if needed, then click ▶ Start`, 'info');
-  // Scroll config into view
-  $('agent').scrollIntoView({ behavior: 'smooth', block: 'center' });
-  $('agent').focus();
-});
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function $(id) { return document.getElementById(id); }
@@ -1856,14 +2106,16 @@ if (isElectron) {
 // ── Init ──────────────────────────────────────────────────────────────────────
 
 (async () => {
-  await loadForm();                          // fetch all config from server
-  checkSetupHint();
-  updateAgentFields($('agent').value);       // show/hide fields based on saved agent
+  await loadForm();
+  updateAgentFields($('agent').value);
+  renderAgentCards();
+  updateHomeButtons();
   updateButtons();
   updateTerminalTitle();
+  setScreen('home');
   connectWS();
-  fetchAllSavedModels();                     // populate model dropdowns from live APIs
+  fetchAllSavedModels();
+  fetchProjectStats();
 
-  // Periodic container list refresh
   setInterval(listContainers, 10000);
 })();

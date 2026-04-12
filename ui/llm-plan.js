@@ -34,54 +34,296 @@ function deleteSession(sessionId) {
 
 // ── Project context helpers ──────────────────────────────────────────────────
 
-/**
- * Read key project files from the host projectPath and return them as a
- * single string suitable for inclusion in the LLM system prompt.
- * Limits each file to 4 KB; skips binaries and node_modules.
- */
-function readProjectContext(projectPath, maxTotalChars = 40000) {
-  if (!projectPath || !fs.existsSync(projectPath)) return '';
+const SKIP_DIRS  = new Set(['node_modules', '.git', '.dart_tool', 'build', 'dist', '.gradle', '.idea', '__pycache__']);
+const SKIP_EXTS  = new Set(['.png','.jpg','.jpeg','.gif','.svg','.ico','.woff','.woff2','.ttf','.eot',
+                             '.pdf','.zip','.tar','.gz','.jar','.class','.pyc','.lock','.log',
+                             '.mp4','.mp3','.mov','.avi','.webm','.apk','.aab','.ipa']);
+const PRIO_FILES = ['README.md','pubspec.yaml','package.json','requirements.txt',
+                    'Cargo.toml','go.mod','pom.xml','build.gradle','build.gradle.kts',
+                    'settings.gradle','settings.gradle.kts','analysis_options.yaml',
+                    'melos.yaml','copilot-instructions.md','TASK.md','REQUIREMENTS.md'];
+const ALLOW_HIDDEN_DIRS = new Set(['.github']);
+const STOP_WORDS = new Set([
+  'about','after','again','agent','allow','already','also','always','among','app','because','before','being',
+  'between','build','changes','clarify','could','current','details','during','each','from','have','into','just',
+  'make','more','most','need','only','other','over','project','should','still','step','steps','task','than',
+  'that','them','then','there','these','they','this','those','through','under','user','using','want','what',
+  'when','where','which','while','with','would','your'
+]);
 
-  const SKIP_DIRS  = new Set(['node_modules', '.git', '.dart_tool', 'build', 'dist', '.gradle', '.idea', '__pycache__']);
-  const SKIP_EXTS  = new Set(['.png','.jpg','.jpeg','.gif','.svg','.ico','.woff','.woff2','.ttf','.eot',
-                               '.pdf','.zip','.tar','.gz','.jar','.class','.pyc','.lock','.log']);
-  const PRIO_FILES = ['README.md','pubspec.yaml','package.json','requirements.txt',
-                      'Cargo.toml','go.mod','pom.xml','build.gradle',
-                      'copilot-instructions.md','TASK.md','REQUIREMENTS.md'];
+function normalizeRel(filePath) {
+  return filePath.split(path.sep).join('/');
+}
 
-  const parts = [];
-  let total   = 0;
+function shouldSkipDir(name) {
+  return SKIP_DIRS.has(name) || (name.startsWith('.') && !ALLOW_HIDDEN_DIRS.has(name));
+}
 
-  const tryAdd = (filePath, label) => {
-    if (total >= maxTotalChars) return;
-    try {
-      const content = fs.readFileSync(filePath, 'utf8').slice(0, 4096);
-      parts.push(`### ${label}\n\`\`\`\n${content}\n\`\`\``);
-      total += content.length;
-    } catch { /* skip unreadable */ }
-  };
+function shouldSkipFile(name) {
+  return SKIP_EXTS.has(path.extname(name).toLowerCase());
+}
 
-  // Priority files first
-  for (const name of PRIO_FILES) {
-    const full = path.join(projectPath, name);
-    if (fs.existsSync(full)) tryAdd(full, name);
+function buildProjectIndex(projectPath, maxFiles = 4000) {
+  if (!projectPath || !fs.existsSync(projectPath)) {
+    return { files: [], totalFiles: 0, totalDirs: 0, truncated: false };
   }
 
-  // Walk directory tree (BFS, skip heavy dirs)
+  const files = [];
+  let totalFiles = 0;
+  let totalDirs  = 0;
+  let truncated  = false;
   const queue = [projectPath];
-  while (queue.length && total < maxTotalChars) {
+
+  while (queue.length && !truncated) {
     const dir = queue.shift();
+    totalDirs += 1;
     let entries;
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
-    for (const e of entries) {
-      const full = path.join(dir, e.name);
-      if (e.isDirectory()) {
-        if (!SKIP_DIRS.has(e.name) && !e.name.startsWith('.')) queue.push(full);
-      } else if (e.isFile()) {
-        const ext = path.extname(e.name).toLowerCase();
-        if (!SKIP_EXTS.has(ext) && !PRIO_FILES.includes(e.name)) tryAdd(full, path.relative(projectPath, full));
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+    catch { continue; }
+
+    entries.sort((a, b) => {
+      if (a.isDirectory() && !b.isDirectory()) return -1;
+      if (!a.isDirectory() && b.isDirectory()) return 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (!shouldSkipDir(entry.name)) queue.push(full);
+        continue;
       }
+      if (!entry.isFile() || shouldSkipFile(entry.name)) continue;
+
+      totalFiles += 1;
+      if (files.length >= maxFiles) {
+        truncated = true;
+        break;
+      }
+
+      const relPath = normalizeRel(path.relative(projectPath, full));
+      const parts   = relPath.split('/');
+      const topLevel = parts.length > 1 ? `${parts[0]}/` : '(root)';
+      let size = 0;
+      try { size = fs.statSync(full).size; } catch { /* ignore */ }
+
+      files.push({
+        path: relPath,
+        name: entry.name,
+        ext: path.extname(entry.name).toLowerCase(),
+        dir: parts.slice(0, -1).join('/') || '.',
+        topLevel,
+        depth: parts.length - 1,
+        size,
+      });
     }
+  }
+
+  return { files, totalFiles, totalDirs, truncated };
+}
+
+function renderProjectMap(projectIndex) {
+  if (!projectIndex?.files?.length) return '(No readable project files found — this may be a new project)';
+
+  const byArea = new Map();
+  projectIndex.files.forEach(file => {
+    const area = byArea.get(file.topLevel) || { count: 0, samples: [] };
+    area.count += 1;
+    if (area.samples.length < 5) area.samples.push(file.path);
+    byArea.set(file.topLevel, area);
+  });
+
+  const rootFiles = projectIndex.files
+    .filter(f => f.topLevel === '(root)')
+    .map(f => f.path)
+    .slice(0, 12);
+
+  const topAreas = [...byArea.entries()]
+    .filter(([name]) => name !== '(root)')
+    .sort((a, b) => b[1].count - a[1].count)
+    .slice(0, 14)
+    .map(([name, meta]) => `- ${name} (${meta.count} files): ${meta.samples.join(', ')}`);
+
+  return [
+    `Indexed readable files: ${projectIndex.totalFiles}${projectIndex.truncated ? '+' : ''}`,
+    `Indexed directories: ${Math.max(projectIndex.totalDirs - 1, 0)}`,
+    projectIndex.truncated ? `Index capped to the first ${projectIndex.files.length} readable files for performance.` : '',
+    `Root files: ${rootFiles.length ? rootFiles.join(', ') : '(none)'}`,
+    'Major areas:',
+    ...(topAreas.length ? topAreas : ['- (no subdirectories indexed)']),
+  ].filter(Boolean).join('\n');
+}
+
+function hydrateSessionContext(sess) {
+  const projectPath = sess?.config?.projectPath;
+  sess.projectIndex = buildProjectIndex(projectPath);
+  sess.projectMap   = renderProjectMap(sess.projectIndex);
+}
+
+function extractKeywords(text, maxKeywords = 14) {
+  const tokens = (text || '').toLowerCase().match(/[a-z0-9][a-z0-9._/-]{2,}/g) || [];
+  const out = [];
+  const seen = new Set();
+
+  for (const token of tokens) {
+    const parts = token.split(/[\/._-]+/);
+    for (const part of parts) {
+      if (part.length < 3) continue;
+      if (/^\d+$/.test(part)) continue;
+      if (STOP_WORDS.has(part)) continue;
+      if (seen.has(part)) continue;
+      seen.add(part);
+      out.push(part);
+      if (out.length >= maxKeywords) return out;
+    }
+  }
+  return out;
+}
+
+function scoreFileForStep(file, stepId, keywords) {
+  const rel  = file.path.toLowerCase();
+  const base = file.name.toLowerCase();
+  let score = 0;
+
+  if (PRIO_FILES.includes(file.name)) score += 28;
+  if (file.depth === 0) score += 6;
+  if (file.size > 0 && file.size < 120000) score += 4;
+  if (file.size > 350000) score -= 4;
+  if (file.ext === '.dart') score += 4;
+
+  for (const keyword of keywords) {
+    if (base.includes(keyword)) score += 18;
+    else if (rel.includes(keyword)) score += 10;
+  }
+
+  if (stepId === 'requirements') {
+    if (['readme.md', 'task.md', 'requirements.md', 'pubspec.yaml', 'package.json'].includes(base)) score += 30;
+    if (rel.startsWith('docs/')) score += 10;
+  } else if (stepId === 'codebase') {
+    if (rel.startsWith('lib/') || rel.startsWith('src/')) score += 18;
+    if (/main|app|bootstrap|router|route|navigation/.test(base)) score += 14;
+    if (/service|provider|bloc|store|controller|screen|page|view|widget/.test(rel)) score += 10;
+    if (rel.startsWith('android/') || rel.startsWith('ios/') || rel.startsWith('web/') || rel.startsWith('windows/') || rel.startsWith('macos/')) score += 7;
+  } else if (stepId === 'gaps') {
+    if (rel.startsWith('lib/') || rel.startsWith('src/')) score += 14;
+    if (/config|settings|env|auth|api|client|service|provider|repository/.test(rel)) score += 10;
+  } else if (stepId === 'approach') {
+    if (rel.startsWith('lib/') || rel.startsWith('src/')) score += 16;
+    if (/architecture|router|route|service|provider|bloc|store|model|repository/.test(rel)) score += 12;
+    if (PRIO_FILES.includes(file.name)) score += 8;
+  } else if (stepId === 'testing') {
+    if (rel.startsWith('test/') || rel.startsWith('integration_test/') || rel.startsWith('e2e/')) score += 30;
+    if (/test|spec|mock|fixture/.test(rel)) score += 18;
+    if (rel.startsWith('.github/workflows/')) score += 20;
+    if (['pubspec.yaml', 'package.json', 'analysis_options.yaml'].includes(file.name)) score += 18;
+    if (rel.startsWith('lib/') || rel.startsWith('src/')) score += 8;
+  } else if (stepId === 'plan') {
+    if (rel.startsWith('lib/') || rel.startsWith('src/')) score += 14;
+    if (rel.startsWith('test/') || rel.startsWith('integration_test/') || rel.startsWith('e2e/')) score += 14;
+    if (PRIO_FILES.includes(file.name)) score += 10;
+  }
+
+  return score;
+}
+
+function selectContextFiles(projectIndex, stepId, userText, historyText, maxFiles = 10) {
+  if (!projectIndex?.files?.length) return [];
+
+  const keywords = extractKeywords(`${userText || ''}\n${historyText || ''}`);
+  const selected = [];
+  const seen = new Set();
+  const topCounts = new Map();
+
+  const addIfPresent = relPath => {
+    const file = projectIndex.files.find(f => f.path.toLowerCase() === relPath.toLowerCase());
+    if (file && !seen.has(file.path)) {
+      seen.add(file.path);
+      selected.push(file);
+      topCounts.set(file.topLevel, (topCounts.get(file.topLevel) || 0) + 1);
+    }
+  };
+
+  const pinnedByStep = {
+    requirements: ['README.md', 'TASK.md', 'REQUIREMENTS.md', 'pubspec.yaml', 'package.json'],
+    codebase:     ['pubspec.yaml', 'package.json', 'lib/main.dart', 'lib/app.dart', 'src/main.ts', 'src/index.ts', 'src/App.tsx'],
+    gaps:         ['pubspec.yaml', 'package.json', 'analysis_options.yaml'],
+    approach:     ['pubspec.yaml', 'package.json', 'analysis_options.yaml'],
+    testing:      ['pubspec.yaml', 'package.json', 'analysis_options.yaml'],
+    plan:         ['pubspec.yaml', 'package.json', 'analysis_options.yaml'],
+  };
+
+  (pinnedByStep[stepId] || []).forEach(addIfPresent);
+
+  const scored = projectIndex.files
+    .map(file => ({ file, score: scoreFileForStep(file, stepId, keywords) }))
+    .filter(item => item.score > 0)
+    .sort((a, b) => b.score - a.score || a.file.path.localeCompare(b.file.path));
+
+  const softAreaLimit = stepId === 'testing' ? 5 : 4;
+  for (const { file } of scored) {
+    if (selected.length >= maxFiles) break;
+    if (seen.has(file.path)) continue;
+    const areaCount = topCounts.get(file.topLevel) || 0;
+    if (areaCount >= softAreaLimit && selected.length < Math.floor(maxFiles * 0.7)) continue;
+    seen.add(file.path);
+    selected.push(file);
+    topCounts.set(file.topLevel, areaCount + 1);
+  }
+
+  return selected.slice(0, maxFiles);
+}
+
+function readFileExcerpt(projectPath, relPath, maxChars) {
+  const fullPath = path.join(projectPath, ...relPath.split('/'));
+  try {
+    const content = fs.readFileSync(fullPath, 'utf8');
+    return {
+      text: content.slice(0, maxChars),
+      truncated: content.length > maxChars,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function buildTurnContextPack(sess, latestUserText, maxChars) {
+  const projectPath = sess?.config?.projectPath;
+  if (!projectPath || !sess?.projectIndex?.files?.length || maxChars <= 0) return '';
+
+  const recentHistory = sess.messages
+    .filter(m => m.role !== 'system')
+    .slice(-6)
+    .map(m => m.content)
+    .join('\n');
+
+  const stepId = sess.currentStep || 'requirements';
+  const maxFiles = stepId === 'testing' ? 10 : 8;
+  const selected = selectContextFiles(sess.projectIndex, stepId, latestUserText, recentHistory, maxFiles);
+  if (!selected.length) return '';
+
+  const keywords = extractKeywords(`${latestUserText || ''}\n${recentHistory || ''}`);
+  const headerLines = [
+    'Planning Context Refresh (live repo excerpts for this turn only)',
+    `Current step: ${stepId}`,
+    `Indexed repo snapshot: ${sess.projectIndex.totalFiles}${sess.projectIndex.truncated ? '+' : ''} readable files`,
+    keywords.length ? `Focus keywords: ${keywords.join(', ')}` : '',
+    'Selected files:',
+  ].filter(Boolean);
+
+  const parts = [headerLines.join('\n')];
+  let used = parts[0].length + 4;
+  const remainingForFiles = Math.max(2000, maxChars - used);
+  const perFileBudget = Math.max(1200, Math.min(3200, Math.floor(remainingForFiles / Math.max(selected.length, 1))));
+
+  for (const file of selected) {
+    if (used >= maxChars) break;
+    const excerpt = readFileExcerpt(projectPath, file.path, perFileBudget);
+    if (!excerpt?.text) continue;
+    const body =
+      `### ${file.path}\n\`\`\`\n${excerpt.text}${excerpt.truncated ? '\n... [truncated]' : ''}\n\`\`\``;
+    if (used + body.length > maxChars && parts.length > 1) break;
+    parts.push(body);
+    used += body.length + 2;
   }
 
   return parts.join('\n\n');
@@ -94,79 +336,114 @@ const PLANNING_STEPS = [
   { id: 'codebase',      label: 'Codebase Review', icon: '🔍' },
   { id: 'gaps',          label: 'Gaps & Unknowns', icon: '❓' },
   { id: 'approach',      label: 'Technical Approach', icon: '🏗️' },
+  { id: 'testing',       label: 'Testing Strategy', icon: '🧪' },
   { id: 'plan',          label: 'Final Plan',       icon: '✅' },
 ];
 
 // ── System prompt ────────────────────────────────────────────────────────────
 
-function buildSystemPrompt(config, projectContext) {
+function buildSystemPrompt(config, projectMap) {
   const task = config.task || config.copilotTask || '';
   const name = config.sessionName || 'this project';
 
-  return `You are Archon, an expert AI software engineer and technical architect.
-You are engaged in a PLANNING SESSION for: "${name}".
+  return `You are Archon, an expert AI software engineer and technical architect driving a GUIDED PLANNING WIZARD for: "${name}".
+
+## How your output is rendered
+You are NOT writing chat messages. You are driving a structured UI with four zones:
+  1. A top progress rail showing the 6 planning steps.
+  2. An "Analysis" side drawer that collects your narrative observations (what you found, risks, architecture notes).
+  3. A focused "Question Card" in the center that presents ONE decision at a time with clickable options.
+  4. A "Decisions" sidebar that lists the answers the user already gave you.
+
+The user interacts with the Question Card — they click an option (often your recommendation) and move on. Long prose, bullet walls, and multi-question messages do NOT work in this UI. Free text outside the tags below is hidden.
 
 ## IMPORTANT — You are a text-only planning assistant
 You do NOT have shell access, tool calls, or the ability to run commands.
-All project context is embedded below in "Project Files". Reason from it directly.
+You receive project context in two forms:
+  1. A repository map below (broad orientation).
+  2. "Planning Context Refresh" messages during the conversation with targeted file excerpts for the current turn (authoritative for detail).
+Do NOT assume unseen files exist, and do NOT pretend you inspected files that were not provided.
 
-## Structured 5-Step Planning Process
-You MUST follow this process exactly — one step at a time, in order:
+## Strict output protocol
+Every reply MUST follow this protocol. The first non-empty line is always a step tag. All content lives inside tagged blocks — free text outside tags is dropped by the UI.
 
-STEP 1 — requirements  : Requirements Clarification
-STEP 2 — codebase      : Codebase Review & Context
-STEP 3 — gaps          : Gaps & Unknowns
-STEP 4 — approach      : Technical Approach
-STEP 5 — plan          : Final Plan
+### Step tag (required first line)
+<STEP:requirements>     (or: codebase, gaps, approach, testing, plan)
 
-### Rules
-- Cover ONLY the current step. Do not jump ahead.
-- At the START of every response, on its own line, output the step tag:
-  <STEP:requirements>  or  <STEP:codebase>  etc.
-- At the END of a step (when you believe you have enough info to move forward),
-  output on its own line: <STEP_DONE:step_id>
-  Then ask the user: "Shall I move to [next step name], or is there anything to revisit?"
-- You MAY go back to a previous step if the user requests it or if new info changes things.
-  When going back, emit the tag for that step.
-- On STEP 5 only, after presenting the plan, wrap it in:
-  <PLAN_START>
-  ...full detailed plan...
-  <PLAN_END>
+### Analysis block (zero or more per reply)
+<ANALYSIS title="What I Found">
+Short markdown narrative — observations, summary, risks, architecture notes.
+Use bullets and short paragraphs. This goes into the Analysis drawer, NOT a question.
+Do not put decisions or questions here.
+</ANALYSIS>
 
-### What each step covers
+### Question block (AT MOST ONE per reply — this is critical)
+<QUESTION>
+{
+  "id": "unique-slug-for-this-decision",
+  "type": "choice",
+  "title": "Short question, max 80 chars, ending in '?'",
+  "context": "One or two sentences explaining why this decision matters.",
+  "options": [
+    { "id": "opt-a", "label": "Short clickable label", "rationale": "Why this option", "recommended": true },
+    { "id": "opt-b", "label": "Short clickable label", "rationale": "Why this option" }
+  ]
+}
+</QUESTION>
+
+### Step done marker (when you have no more blocking questions for this step)
+<STEP_DONE:requirements>
+
+### Final plan markers (STEP 6 only)
+<PLAN_START>
+...full detailed markdown plan...
+<PLAN_END>
+
+## Question types
+You may set "type" to one of:
+
+- "choice"  — N options, user picks one. Always provide at least 2 options.
+- "confirm" — yes/no. Options MUST be [{"id":"yes","label":"Yes","rationale":"..."},{"id":"no","label":"No","rationale":"..."}] with one marked recommended.
+- "multi"   — user picks zero or more. Mark recommended=true on every option you would pre-select.
+- "text"    — freeform short text. Omit "options"; instead include "placeholder" and "default" (your recommended answer).
+- "number"  — numeric input. Omit "options"; include "min", "max", and "default".
+
+## Hard rules
+1. Emit <STEP:x> as the FIRST non-empty line of every reply.
+2. Emit AT MOST ONE <QUESTION> per reply. The UI shows one decision at a time — never stack multiple questions in a reply. If you have 3 decisions, ask them across 3 replies.
+3. If the current step has no blocking decisions, skip the question and emit <STEP_DONE:x> so the UI can advance. Do not invent filler questions.
+4. For choice/confirm/multi questions, exactly ONE option must have "recommended": true (or for "multi", all pre-selected options). Pick your recommendation carefully — the user can accept it with a single click.
+5. Every option needs "id", "label", and a short "rationale" (one line, ≤ 120 chars).
+6. "title" must be a complete question ending with "?". "context" must be ONE or TWO sentences of "why this decision matters" — no bullets, no headings.
+7. Put observations, summaries, code findings, architecture notes, and risks in <ANALYSIS> blocks. NEVER cram narrative into a question's context field.
+8. When the user answers, you will see a user message that tells you what they chose. Do NOT repeat the question back. Either ask the next decision for this step (another <QUESTION>) or close the step with <STEP_DONE:x>.
+9. Never output anything outside a tagged block. No greetings, no "Sure!", no "Here's my analysis:". The UI hides it.
+10. Use valid JSON inside <QUESTION> blocks — double-quoted strings, no trailing commas, no comments.
+
+## What each step covers
 STEP 1 — requirements:
-  - Restate the task in your own words
-  - List what you understand as required features/outcomes
-  - Ask targeted clarifying questions (numbered list) — ONLY things that affect architecture
-  - Do NOT analyze code yet
+  Restate the task, list required outcomes in an <ANALYSIS>, then ask clarifying decisions that materially change direction (architecture, scope, libraries). If none are blocking, <STEP_DONE:requirements>.
 
 STEP 2 — codebase:
-  - Review the provided project files
-  - Summarize the existing architecture, patterns, and tech stack
-  - Identify relevant existing code that the task will interact with
-  - No questions needed unless critical — summarize what you found
+  Review the repository map and any Planning Context Refresh excerpts. Summarize existing architecture, patterns, stack, and relevant files in one or two <ANALYSIS> blocks. Usually NO questions — emit <STEP_DONE:codebase>.
 
 STEP 3 — gaps:
-  - List specific gaps, unknowns, or conflicts between requirements and codebase
-  - Ask the user to resolve any blockers before proceeding
-  - Keep this focused — only real blockers, not hypotheticals
+  List real gaps/blockers in an <ANALYSIS>. Ask only REAL blockers, one per reply. If none, <STEP_DONE:gaps>.
 
 STEP 4 — approach:
-  - Propose the technical approach: architecture decisions, libraries, patterns
-  - Break work into ordered milestones with acceptance criteria
-  - Call out risks and mitigations
-  - Ask for approval or changes before finalizing
+  Present the technical approach in <ANALYSIS> (architecture, libraries, milestones, risks, mitigations). Ask decisions one at a time: library picks, architecture branches, scope tradeoffs.
 
-STEP 5 — plan:
-  - Write the complete, detailed implementation plan
-  - Include: file-by-file changes, milestone sequence, test strategy
-  - Output the plan inside <PLAN_START>...<PLAN_END> tags when finalized
+STEP 5 — testing:
+  Propose a testing strategy in <ANALYSIS>. Confirm coverage tradeoffs with at most one or two <QUESTION>s if needed.
+
+STEP 6 — plan:
+  Emit one <ANALYSIS title="Plan Summary"> and the full plan wrapped in <PLAN_START>...<PLAN_END>. Include file-by-file changes, milestone sequence, and the agreed testing strategy. No <QUESTION> on this step.
 
 ## Task / Requirements
 ${task}
 
-## Project Files (your entire codebase context — reason from these directly)
-${projectContext || '(No project files found — this may be a new project)'}`;
+## Repository Map (live snapshot captured when this session started/resumed)
+${projectMap || '(No readable project files found — this may be a new project)'}`;
 }
 
 // ── Agent API implementations ────────────────────────────────────────────────
@@ -555,8 +832,13 @@ function startPlanSession(config, resume = false) {
     if (saved && saved.messages?.length) {
       createSession(sessionId, agent, config);
       const sess = getSession(sessionId);
-      // Restore conversation; keep current config (with fresh tokens)
-      sess.messages       = saved.messages;
+      hydrateSessionContext(sess);
+      const systemPrompt = buildSystemPrompt(config, sess.projectMap);
+      // Restore conversation with a fresh live repo map
+      sess.messages       = [
+        { role: 'system', content: systemPrompt },
+        ...(saved.messages || []).filter(m => m.role !== 'system'),
+      ];
       sess.currentStep    = saved.currentStep    || 'requirements';
       sess.completedSteps = saved.completedSteps || [];
       return { sessionId, resumed: true, currentStep: sess.currentStep, completedSteps: sess.completedSteps };
@@ -566,10 +848,10 @@ function startPlanSession(config, resume = false) {
   // Fresh start — delete any stale saved session
   if (config.projectPath) deleteSavedSession(config.projectPath);
 
-  const projectCtx   = readProjectContext(config.projectPath);
-  const systemPrompt = buildSystemPrompt(config, projectCtx);
   createSession(sessionId, agent, config);
   const sess = getSession(sessionId);
+  hydrateSessionContext(sess);
+  const systemPrompt = buildSystemPrompt(config, sess.projectMap);
   sess.messages.push({ role: 'system', content: systemPrompt });
 
   return { sessionId, resumed: false, currentStep: 'requirements', completedSteps: [] };
@@ -665,12 +947,17 @@ async function sendPlanMessage(sessionId, userText, onChunk, onDone, onError, on
   const AGENT_BUDGETS = { copilot: 5500, aider: 5500, claude: 80000, gemini: 80000 };
   const TOKEN_BUDGETS = MODEL_BUDGETS[model] || AGENT_BUDGETS[agent] || 5500;
   const charBudget = TOKEN_BUDGETS * 4;
+  const contextBudget = sess.currentStep === 'requirements'
+    ? Math.min(5000, Math.floor(charBudget * 0.12))
+    : Math.min(18000, Math.max(6000, Math.floor(charBudget * 0.32)));
+  const turnContext = buildTurnContextPack(sess, userText, contextBudget);
 
-  function trimmedMessages() {
+  function trimmedMessages(contextText = '') {
     const system = sess.messages.filter(m => m.role === 'system');
     const chat   = sess.messages.filter(m => m.role !== 'system');
     const systemChars = system.reduce((n, m) => n + m.content.length, 0);
-    let budget = charBudget - systemChars;
+    const reservedForContext = contextText ? contextText.length + 800 : 0;
+    let budget = charBudget - systemChars - reservedForContext;
     const kept = [];
     for (let i = chat.length - 1; i >= 0; i--) {
       const len = chat[i].content.length;
@@ -685,18 +972,41 @@ async function sendPlanMessage(sessionId, userText, onChunk, onDone, onError, on
     return [...system, ...kept];
   }
 
+  function withTurnContext(messages, contextText) {
+    if (!contextText) return messages;
+    const injected = {
+      role: 'user',
+      _internal: true,
+      content:
+        `${contextText}\n\nUse this context to answer the user's latest message. ` +
+        `Treat it as current-turn supporting material, not as a user request.`,
+    };
+    const out = [...messages];
+    let insertAt = out.length;
+    for (let i = out.length - 1; i >= 0; i--) {
+      if (out[i].role !== 'system') {
+        insertAt = i;
+        break;
+      }
+    }
+    out.splice(insertAt, 0, injected);
+    return out;
+  }
+
+  const messagesToSend = withTurnContext(trimmedMessages(turnContext), turnContext);
+
   if (agent === 'copilot') {
-    await streamCopilot(trimmedMessages(), sess.config, accChunk, accDone, onError);
+    await streamCopilot(messagesToSend, sess.config, accChunk, accDone, onError);
   } else if (agent === 'claude') {
-    await streamClaude(trimmedMessages(), sess.config, accChunk, accDone, onError);
+    await streamClaude(messagesToSend, sess.config, accChunk, accDone, onError);
   } else if (agent === 'gemini') {
-    await streamGemini(trimmedMessages(), sess.config, accChunk, accDone, onError);
+    await streamGemini(messagesToSend, sess.config, accChunk, accDone, onError);
   } else {
     // aider: fall back to claude if key present, else copilot
     if (sess.config.anthropicApiKey) {
-      await streamClaude(trimmedMessages(), sess.config, accChunk, accDone, onError);
+      await streamClaude(messagesToSend, sess.config, accChunk, accDone, onError);
     } else {
-      await streamCopilot(trimmedMessages(), sess.config, accChunk, accDone, onError);
+      await streamCopilot(messagesToSend, sess.config, accChunk, accDone, onError);
     }
   }
 }
@@ -714,18 +1024,18 @@ function extractFinalPlan(sessionId) {
   return match ? match[1].trim() : null;
 }
 
-const STRIP_TAGS_RE = /<\/?STEP[^>]*>|<\/?STEP_DONE[^>]*>|<PLAN_START>|<PLAN_END>/g;
-
 /**
- * Returns the conversation history for display, filtering out system
- * prompt messages and internal kickoff messages, and stripping step tags.
+ * Returns the raw conversation history for the planning wizard.
+ * The client re-parses each assistant message through the tag parser
+ * to rebuild the analysis drawer, decisions, and current question.
+ * Filters out system prompt and internal kickoff messages.
  */
 function getSessionHistory(sessionId) {
   const sess = getSession(sessionId);
   if (!sess) return [];
   return sess.messages
     .filter(m => m.role !== 'system' && !m._internal)
-    .map(m => ({ role: m.role, content: m.content.replace(STRIP_TAGS_RE, '').trim() }));
+    .map(m => ({ role: m.role, content: m.content }));
 }
 
-module.exports = { startPlanSession, sendPlanMessage, extractFinalPlan, getSessionHistory, deleteSession, getSession, getSavedSessionMeta, deleteSavedSession, PLANNING_STEPS };
+module.exports = { startPlanSession, sendPlanMessage, extractFinalPlan, getSessionHistory, deleteSession, getSession, getSavedSessionMeta, deleteSavedSession, PLANNING_STEPS, buildProjectIndex };
