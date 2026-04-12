@@ -23,6 +23,7 @@
     <span id="quotaBadge" class="quota-badge hidden" title="Remaining API requests"></span>
     <span id="dockerLabel" class="remote-label">Local Docker</span>
     <button id="remoteBtn" class="btn btn-ghost btn-sm" title="Configure Docker host">⚙ Docker</button>
+    <button id="headerSettingsBtn" class="btn btn-ghost btn-sm" title="Settings">⚙ Settings</button>
   </div>
 </header>
 
@@ -171,58 +172,55 @@
 
       <div class="planning-body">
 
-        <aside class="decisions-sidebar">
-          <div class="sidebar-header">
-            <span class="sidebar-title">Decisions</span>
-            <span id="decisionsCount" class="sidebar-count">0</span>
+        <!-- LEFT: context + decisions -->
+        <aside class="decisions-panel">
+          <div class="panel-section">
+            <div class="panel-header">Session</div>
+            <div id="planningContext" class="panel-context">
+              <!-- Filled by JS with project/task/agent info -->
+            </div>
           </div>
-          <div id="decisionsList" class="decisions-list">
-            <div class="decisions-empty">No decisions yet. Your answers appear here.</div>
+          <div class="panel-section panel-section-grow">
+            <div class="panel-header">
+              Decisions <span id="decisionsCount" class="panel-count">0</span>
+            </div>
+            <div id="decisionsList" class="decisions-list">
+              <div class="decisions-empty">Choices appear here.</div>
+            </div>
           </div>
         </aside>
 
-        <main class="question-pane">
+        <!-- CENTER: scrollable content — analysis + inline questions -->
+        <main class="planning-content">
+          <div id="planningFlow" class="planning-flow">
+            <!-- Analysis items and question prompts appear here inline -->
+          </div>
+
+          <!-- Thinking indicator (at bottom of flow) -->
           <div id="thinkingCard" class="thinking-card">
             <div class="thinking-spinner"></div>
-            <div class="thinking-label">Agent is analyzing your project…</div>
+            <span class="thinking-label">Analyzing…</span>
           </div>
+
+          <!-- These are hidden containers — JS moves their content inline into planningFlow -->
           <div id="questionCard" class="question-card hidden"></div>
           <div id="stepDoneCard" class="step-done-card hidden">
-            <div class="sd-icon">✓</div>
-            <div class="sd-body">
-              <div class="sd-title">Step complete</div>
-              <div class="sd-subtitle" id="stepDoneSubtitle">Ready to move on.</div>
-            </div>
-            <button id="advanceStepBtn" class="btn btn-primary">Continue →</button>
+            <span class="sd-icon">✓</span>
+            <span class="sd-body">Step complete.</span>
+            <button id="advanceStepBtn" class="btn btn-primary btn-sm">Continue →</button>
           </div>
           <div id="planReadyCard" class="plan-ready-card hidden">
-            <div class="pr-icon">🗺</div>
-            <div class="pr-body">
-              <div class="pr-title">Plan ready</div>
-              <div class="pr-subtitle">Review the plan in the Analysis drawer.</div>
-            </div>
-            <button id="execPlanBtn" class="btn btn-start full-width" title="Execute the plan">
-              ▶ Execute Plan
-            </button>
+            <span class="pr-body">Plan ready — review above, then execute.</span>
+            <button id="execPlanBtn" class="btn btn-start btn-sm">▶ Execute Plan</button>
           </div>
         </main>
 
-        <aside class="analysis-drawer">
-          <div class="sidebar-header">
-            <span class="sidebar-title">Analysis</span>
-            <span id="analysisCount" class="sidebar-count">0</span>
-          </div>
-          <div id="analysisList" class="analysis-list">
-            <div class="analysis-empty">Observations from the agent appear here as planning proceeds.</div>
-          </div>
-        </aside>
-
       </div>
 
+      <!-- Chat bar — direct child of chatPanel, always visible at bottom -->
       <div class="planning-chat-bar">
-        <span class="chat-bar-hint">Ask anything:</span>
         <textarea id="chatInput" class="chat-input" rows="1"
-          placeholder="e.g. Why JWT? / Can we use Firebase? / Go back to Requirements (Enter to send, Shift+Enter for newline)"></textarea>
+          placeholder="Ask anything… (Enter to send)"></textarea>
         <button id="chatSendBtn" class="btn btn-primary chat-send-btn">Send</button>
       </div>
 

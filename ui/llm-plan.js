@@ -144,14 +144,13 @@ function renderProjectMap(projectIndex) {
     .slice(0, 14)
     .map(([name, meta]) => `- ${name} (${meta.count} files): ${meta.samples.join(', ')}`);
 
-  return [
-    `Indexed readable files: ${projectIndex.totalFiles}${projectIndex.truncated ? '+' : ''}`,
-    `Indexed directories: ${Math.max(projectIndex.totalDirs - 1, 0)}`,
-    projectIndex.truncated ? `Index capped to the first ${projectIndex.files.length} readable files for performance.` : '',
-    `Root files: ${rootFiles.length ? rootFiles.join(', ') : '(none)'}`,
-    'Major areas:',
-    ...(topAreas.length ? topAreas : ['- (no subdirectories indexed)']),
+  const map = [
+    `Files: ${projectIndex.totalFiles}${projectIndex.truncated ? '+' : ''}, Dirs: ${Math.max(projectIndex.totalDirs - 1, 0)}`,
+    `Root: ${rootFiles.length ? rootFiles.join(', ') : '(none)'}`,
+    ...(topAreas.length ? topAreas : ['- (no subdirectories)']),
   ].filter(Boolean).join('\n');
+  // Cap repo map to ~2000 chars to stay lean for smaller models
+  return map.length > 2000 ? map.slice(0, 2000) + '\n…(truncated)' : map;
 }
 
 function hydrateSessionContext(sess) {
@@ -382,11 +381,11 @@ Do not put decisions or questions here.
 {
   "id": "unique-slug-for-this-decision",
   "type": "choice",
-  "title": "Short question, max 80 chars, ending in '?'",
-  "context": "One or two sentences explaining why this decision matters.",
+  "title": "One-line question, max 60 chars, ending in '?'",
+  "context": "Optional. Keep empty or a very short clause only when absolutely needed.",
   "options": [
-    { "id": "opt-a", "label": "Short clickable label", "rationale": "Why this option", "recommended": true },
-    { "id": "opt-b", "label": "Short clickable label", "rationale": "Why this option" }
+    { "id": "opt-a", "label": "Short clickable label", "rationale": "Very short rationale", "recommended": true },
+    { "id": "opt-b", "label": "Short clickable label", "rationale": "Very short rationale" }
   ]
 }
 </QUESTION>
@@ -411,33 +410,34 @@ You may set "type" to one of:
 ## Hard rules
 1. Emit <STEP:x> as the FIRST non-empty line of every reply.
 2. Emit AT MOST ONE <QUESTION> per reply. The UI shows one decision at a time — never stack multiple questions in a reply. If you have 3 decisions, ask them across 3 replies.
-3. If the current step has no blocking decisions, skip the question and emit <STEP_DONE:x> so the UI can advance. Do not invent filler questions.
-4. For choice/confirm/multi questions, exactly ONE option must have "recommended": true (or for "multi", all pre-selected options). Pick your recommendation carefully — the user can accept it with a single click.
-5. Every option needs "id", "label", and a short "rationale" (one line, ≤ 120 chars).
-6. "title" must be a complete question ending with "?". "context" must be ONE or TWO sentences of "why this decision matters" — no bullets, no headings.
-7. Put observations, summaries, code findings, architecture notes, and risks in <ANALYSIS> blocks. NEVER cram narrative into a question's context field.
-8. When the user answers, you will see a user message that tells you what they chose. Do NOT repeat the question back. Either ask the next decision for this step (another <QUESTION>) or close the step with <STEP_DONE:x>.
-9. Never output anything outside a tagged block. No greetings, no "Sure!", no "Here's my analysis:". The UI hides it.
-10. Use valid JSON inside <QUESTION> blocks — double-quoted strings, no trailing commas, no comments.
+3. **EVERY step (except step 6) MUST end with a <QUESTION> before emitting <STEP_DONE>.** The user is at the controls — they need to confirm or decide something before you move on. Even if everything looks clear, ask a confirmation like "Does this understanding look correct?" or "Should I proceed with this approach?". Never auto-close a step without user input.
+4. Only emit <STEP_DONE:x> AFTER the user has answered all questions for that step. Do NOT emit <STEP_DONE> in the same reply as a <QUESTION>. The sequence is: ANALYSIS → QUESTION → (user answers) → STEP_DONE.
+5. For choice/confirm/multi questions, exactly ONE option must have "recommended": true (or for "multi", all pre-selected options). Pick your recommendation carefully — the user can accept it with a single click.
+6. Every option needs "id", "label", and a very short "rationale" (ideally a few words, never a paragraph).
+7. "title" must be a complete question ending with "?". Keep it to one line. "context" is optional and should usually be omitted or kept extremely short.
+8. Put observations, summaries, code findings, architecture notes, and risks in <ANALYSIS> blocks. NEVER cram narrative into a question's context field.
+9. When the user answers, you will see a user message that tells you what they chose. Do NOT repeat the question back. Either ask the next decision for this step (another <QUESTION>) or close the step with <STEP_DONE:x>.
+10. Never output anything outside a tagged block. No greetings, no "Sure!", no "Here's my analysis:". The UI hides it.
+11. Use valid JSON inside <QUESTION> blocks — double-quoted strings, no trailing commas, no comments.
 
 ## What each step covers
 STEP 1 — requirements:
-  Restate the task, list required outcomes in an <ANALYSIS>, then ask clarifying decisions that materially change direction (architecture, scope, libraries). If none are blocking, <STEP_DONE:requirements>.
+  Restate the task and list required outcomes in an <ANALYSIS>. Then ask at least one <QUESTION> — e.g. confirm scope, clarify priority, or choose between approaches. Wait for the user's answer before emitting <STEP_DONE:requirements>.
 
 STEP 2 — codebase:
-  Review the repository map and any Planning Context Refresh excerpts. Summarize existing architecture, patterns, stack, and relevant files in one or two <ANALYSIS> blocks. Usually NO questions — emit <STEP_DONE:codebase>.
+  Review the repository map and any Planning Context Refresh excerpts. Summarize existing architecture, patterns, stack, and relevant files in <ANALYSIS> blocks. Ask a confirmation question (e.g. "I'll focus on these key files — does this match your expectations?"). Wait for answer, then <STEP_DONE:codebase>.
 
 STEP 3 — gaps:
-  List real gaps/blockers in an <ANALYSIS>. Ask only REAL blockers, one per reply. If none, <STEP_DONE:gaps>.
+  List real gaps/blockers in an <ANALYSIS>. Ask the user to confirm or prioritize the gaps (e.g. "Which of these gaps should we address first?"). Wait for answer, then <STEP_DONE:gaps>.
 
 STEP 4 — approach:
-  Present the technical approach in <ANALYSIS> (architecture, libraries, milestones, risks, mitigations). Ask decisions one at a time: library picks, architecture branches, scope tradeoffs.
+  Present the technical approach in <ANALYSIS> (architecture, libraries, milestones, risks, mitigations). Ask decisions one at a time: library picks, architecture branches, scope tradeoffs. Multiple rounds of questions allowed.
 
 STEP 5 — testing:
-  Propose a testing strategy in <ANALYSIS>. Confirm coverage tradeoffs with at most one or two <QUESTION>s if needed.
+  Propose a testing strategy in <ANALYSIS>. Ask the user to confirm coverage level or tradeoffs. Wait for answer, then <STEP_DONE:testing>.
 
 STEP 6 — plan:
-  Emit one <ANALYSIS title="Plan Summary"> and the full plan wrapped in <PLAN_START>...<PLAN_END>. Include file-by-file changes, milestone sequence, and the agreed testing strategy. No <QUESTION> on this step.
+  Emit one <ANALYSIS title="Plan Summary"> and the full plan wrapped in <PLAN_START>...<PLAN_END>. Include file-by-file changes, milestone sequence, and the agreed testing strategy. No <QUESTION> on this step — this is the final output.
 
 ## Task / Requirements
 ${task}
@@ -470,7 +470,7 @@ async function streamCopilot(messages, config, onChunk, onDone, onError) {
     model,
     messages: msgsToSend,
     stream:   !isO1,
-    max_tokens: isO1 ? 4096 : 2048,
+    max_tokens: isO1 ? 4096 : 1500,
   });
 
   let res;
@@ -488,6 +488,15 @@ async function streamCopilot(messages, config, onChunk, onDone, onError) {
 
   if (!res.ok) {
     const text = await res.text().catch(() => '');
+    // Auto-retry on 429 rate limit (wait the suggested time)
+    if (res.status === 429) {
+      const retryMatch = text.match(/wait (\d+) seconds/i);
+      const waitSec = retryMatch ? parseInt(retryMatch[1], 10) + 1 : 10;
+      console.log(`[plan] 429 rate limited — retrying in ${waitSec}s`);
+      onChunk(`(Rate limited — retrying in ${waitSec}s…)\n`);
+      await new Promise(r => setTimeout(r, waitSec * 1000));
+      return streamCopilot(messages, config, onChunk, onDone, onError);
+    }
     onError(new Error(`GitHub Models API ${res.status}: ${text.slice(0, 200)}`));
     return;
   }
@@ -947,10 +956,13 @@ async function sendPlanMessage(sessionId, userText, onChunk, onDone, onError, on
   const AGENT_BUDGETS = { copilot: 5500, aider: 5500, claude: 80000, gemini: 80000 };
   const TOKEN_BUDGETS = MODEL_BUDGETS[model] || AGENT_BUDGETS[agent] || 5500;
   const charBudget = TOKEN_BUDGETS * 4;
+  // Skip turn context on requirements step (agent doesn't need files yet) and keep it lean
   const contextBudget = sess.currentStep === 'requirements'
-    ? Math.min(5000, Math.floor(charBudget * 0.12))
-    : Math.min(18000, Math.max(6000, Math.floor(charBudget * 0.32)));
-  const turnContext = buildTurnContextPack(sess, userText, contextBudget);
+    ? 0   // No file excerpts needed for requirements — just the repo map in system prompt
+    : (agent === 'copilot' || agent === 'aider')
+      ? Math.min(8000, Math.max(3000, Math.floor(charBudget * 0.20)))
+      : Math.min(18000, Math.max(6000, Math.floor(charBudget * 0.32)));
+  const turnContext = contextBudget > 0 ? buildTurnContextPack(sess, userText, contextBudget) : '';
 
   function trimmedMessages(contextText = '') {
     const system = sess.messages.filter(m => m.role === 'system');
@@ -994,6 +1006,11 @@ async function sendPlanMessage(sessionId, userText, onChunk, onDone, onError, on
   }
 
   const messagesToSend = withTurnContext(trimmedMessages(turnContext), turnContext);
+
+  // Log token estimate for debugging
+  const totalChars = messagesToSend.reduce((n, m) => n + (m.content || '').length, 0);
+  const estTokens = Math.ceil(totalChars / 4);
+  console.log(`[plan] sending ${messagesToSend.length} messages, ~${estTokens} tokens (${totalChars} chars), step=${sess.currentStep}, agent=${agent}`);
 
   if (agent === 'copilot') {
     await streamCopilot(messagesToSend, sess.config, accChunk, accDone, onError);

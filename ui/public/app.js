@@ -37,15 +37,19 @@ const term    = new Terminal({
 const fitAddon = new FitAddon.FitAddon();
 term.loadAddon(fitAddon);
 term.open(document.getElementById('terminal'));
-fitAddon.fit();
-
+// Don't fit yet — terminal panel starts hidden; fit when first shown
+try { fitAddon.fit(); } catch (_) {}
 term.writeln('\x1b[90mArchon — ready.\x1b[0m\r\n');
 
-// Resize observer → keep xterm fitted
-const resizeObs = new ResizeObserver(() => fitAddon.fit());
+// Resize observer → keep xterm fitted (safe if panel is hidden)
+const resizeObs = new ResizeObserver(() => {
+  try { if (!$('terminalPanel')?.classList.contains('hidden')) fitAddon.fit(); } catch (_) {}
+});
 resizeObs.observe(document.getElementById('terminalPanel'));
 
-window.addEventListener('resize', () => fitAddon.fit());
+window.addEventListener('resize', () => {
+  try { if (!$('terminalPanel')?.classList.contains('hidden')) fitAddon.fit(); } catch (_) {}
+});
 
 // ── xterm keyboard input → container stdin (used for TUI plan agents) ─────────
 let termInputEnabled = false; // only forward keys when a TUI plan session is active
@@ -87,7 +91,7 @@ function setScreen(newScreen) {
   if (newScreen === 'execution') {
     $('chatPanel')?.classList.add('hidden');
     $('terminal')?.classList.remove('hidden');
-    fitAddon.fit();
+    setTimeout(() => { try { fitAddon.fit(); } catch (_) {} }, 50);
   }
   if (newScreen === 'home') {
     renderAgentCards();
@@ -193,6 +197,8 @@ function connectWS() {
         const cfg = pendingPlanConfig;
         pendingPlanConfig = null;
         if (!cfg) break;
+        // Show terminal panel so resume prompt / launch progress is visible
+        setScreen('execution');
         if (msg.exists && msg.meta) {
           showResumePrompt(msg.meta, cfg);
         } else {
@@ -223,6 +229,7 @@ function connectWS() {
           if (!msg.resumed) {
             resetPlanningState();
             initProgressRail();
+            updatePlanningContext();
             showThinking(true);
           }
           // Still sync PTY size for the underlying terminal process
@@ -329,6 +336,8 @@ function enterState(newState) {
     setScreen('planning');
     $('terminal').classList.add('hidden');
     $('chatPanel').classList.remove('hidden');
+    updatePlanningContext();
+    requestAnimationFrame(() => $('chatInput')?.focus());
   } else if (newState === 'running') {
     setScreen('execution');
     $('terminal').classList.remove('hidden');
@@ -548,48 +557,44 @@ function validateConfig() {
   clearFieldErrors();
   const cfg = getConfig();
   let valid = true;
-
-  function credHint(msg) {
-    const hint = $('credentialsHint');
-    if (hint) hint.textContent = '⚠ ' + msg;
-  }
+  let credError = false;
 
   if (!cfg.projectPath) {
     setFieldError('projectPath', 'Project path is required');
+    toast('Enter a project path', 'warning');
     valid = false;
   }
   if (cfg.agent === 'copilot' && !cfg.ghToken) {
-    credHint('GitHub Token required');
-    setFieldError('ghToken', 'GitHub Token is required for Copilot agent');
-    valid = false;
+    setFieldError('ghToken', 'GitHub Token is required');
+    credError = true; valid = false;
   }
   if (cfg.agent === 'claude' && !cfg.anthropicApiKey) {
-    credHint('Anthropic API Key required');
-    setFieldError('anthropicApiKey', 'Anthropic API Key is required for Claude agent');
-    valid = false;
+    setFieldError('anthropicApiKey', 'Anthropic API Key is required');
+    credError = true; valid = false;
   }
   if (cfg.agent === 'gemini' && !cfg.geminiApiKey) {
-    credHint('Gemini API Key required');
-    setFieldError('geminiApiKey', 'Gemini API Key is required for Gemini agent');
-    valid = false;
+    setFieldError('geminiApiKey', 'Gemini API Key is required');
+    credError = true; valid = false;
   }
   if (cfg.agent === 'aider' && !cfg.anthropicApiKey && !cfg.openaiApiKey && !cfg.geminiApiKey) {
-    credHint('At least one API key required');
-    const sec = $('credentialsSection');
-    if (sec) {
-      sec.open = true;
-      const sum = sec.querySelector('summary');
-      if (sum) { sum.classList.remove('cg-error-pulse'); void sum.offsetWidth; sum.classList.add('cg-error-pulse'); }
-      setTimeout(() => sec.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
-    }
-    valid = false;
+    credError = true; valid = false;
   }
   if (cfg.agent === 'custom' && (!cfg.customApiBase || !cfg.customApiKey)) {
-    credHint('API Base URL and Key required');
     if (!cfg.customApiBase) setFieldError('customApiBase', 'API Base URL is required');
     if (!cfg.customApiKey) setFieldError('customApiKey', 'API Key is required');
-    valid = false;
+    credError = true; valid = false;
   }
+
+  // Open settings drawer to credentials tab if key is missing
+  if (credError) {
+    toast('API key required — configure in Settings', 'warning');
+    $('settingsDrawer')?.classList.remove('hidden');
+    document.querySelectorAll('.drawer-tab').forEach(t => t.classList.remove('is-active'));
+    document.querySelectorAll('.drawer-tab-panel').forEach(p => p.classList.remove('is-active'));
+    document.querySelector('[data-tab="credentials"]')?.classList.add('is-active');
+    document.querySelector('[data-panel="credentials"]')?.classList.add('is-active');
+  }
+
   return valid ? cfg : null;
 }
 
@@ -778,6 +783,7 @@ $('startBtn').addEventListener('click', () => {
   const cfg = validateConfig();
   if (!cfg) return;
   lastConfig = cfg;
+  setScreen('execution');
   clearTerminal();
   term.writeln('\x1b[32m[start] Launching agent…\x1b[0m\r\n');
   wsSend({ type: 'start_container', config: cfg, mode: 'normal' });
@@ -897,7 +903,9 @@ function processAgentTurn(text) {
     return;
   }
 
-  // Nothing structured — hide thinking
+  // If we got analysis but no question/step_done/plan, show a waiting state
+  // This shouldn't happen with the updated prompt, but handles edge cases
+  // If we got analysis but no question, just hide thinking — content is visible in the flow
   showThinking(false);
 }
 
@@ -914,6 +922,22 @@ function initProgressRail() {
     ol.appendChild(li);
   });
   updateProgressRail(planningState.step, false);
+}
+
+/** Populate the left sidebar with session context */
+function updatePlanningContext() {
+  const ctx = $('planningContext');
+  if (!ctx) return;
+  const project = (lastConfig?.projectPath || $('projectPath')?.value || '').trim();
+  const task = (lastConfig?.task || lastConfig?.copilotTask || $('task')?.value || '').trim();
+  const agent = lastConfig?.agent || $('agent')?.value || 'copilot';
+  const sessionName = (lastConfig?.sessionName || $('sessionName')?.value || '').trim();
+  const agentName = (AGENT_INFO[agent]?.name || agent).split('(')[0].trim();
+  ctx.innerHTML = `
+    <div class="panel-context-item"><span class="panel-context-label">project</span><br><span class="panel-context-value">${project.split(/[/\\]/).pop() || project || '—'}</span></div>
+    ${sessionName ? `<div class="panel-context-item"><span class="panel-context-label">session</span><br><span class="panel-context-value">${sessionName}</span></div>` : ''}
+    ${task ? `<div class="panel-context-item"><span class="panel-context-label">task</span><br><span class="panel-context-value">${task.length > 72 ? task.slice(0, 72) + '…' : task}</span></div>` : ''}
+    <div class="panel-context-item"><span class="panel-context-label">agent</span><br><span class="panel-context-value">${agentName}</span></div>`;
 }
 
 /** Update progress rail active/done states */
@@ -939,80 +963,61 @@ function updateProgressRail(stepId, done) {
 function showThinking(visible) {
   const card = $('thinkingCard');
   if (card) card.classList.toggle('hidden', !visible);
-  if (visible) {
-    $('questionCard')?.classList.add('hidden');
-    $('stepDoneCard')?.classList.add('hidden');
-  }
 }
 
 /** Render a typed question card in the center pane */
 function renderQuestionCard(question) {
-  const card = $('questionCard');
-  if (!card || !question) return;
+  const flow = $('planningFlow');
+  if (!flow || !question) return;
 
   planningState.currentQuestion = question;
-  const stepLabel = PLANNING_STEPS.find(s => s.id === planningState.step)?.label || planningState.step;
   const type = question.type || 'choice';
+
+  // Remove any previous active question card
+  flow.querySelectorAll('.question-card-active').forEach(el => el.remove());
+
+  const card = document.createElement('div');
+  card.className = 'question-card question-card-active';
 
   let optionsHtml = '';
   if (type === 'choice' || type === 'confirm' || type === 'multi') {
     optionsHtml = (question.options || []).map((opt, i) => {
       const isRec = opt.recommended;
-      const recBadge = isRec ? '<span class="qc-recommended-badge">Recommended</span>' : '';
-      const multiCls = type === 'multi' ? ' is-multi' : '';
       const val = (opt.value || opt.label || '').replace(/"/g, '&quot;');
-      return `
-        <div class="qc-option${multiCls}${isRec ? ' is-recommended' : ''}" data-index="${i}" data-value="${val}">
-          <span class="qc-option-radio"></span>
-          <div class="qc-option-body">
-            <span class="qc-option-label">${opt.label || opt.value || ''}</span>
-            ${opt.rationale ? `<span class="qc-option-rationale">${opt.rationale}</span>` : ''}
-            ${recBadge}
-          </div>
-        </div>`;
+      return `<button class="qc-chip${isRec ? ' qc-chip-rec' : ''}" data-index="${i}" data-value="${val}" data-action="pick">${opt.label || opt.value}</button>`;
     }).join('');
   } else if (type === 'text' || type === 'number') {
     const inputType = type === 'number' ? 'number' : 'text';
     const defaultVal = question.default || '';
-    optionsHtml = `
-      <input class="qc-input-field" type="${inputType}" placeholder="${question.placeholder || 'Type your answer...'}" value="${defaultVal}">
-      ${defaultVal ? `<div class="qc-default-hint">Default: ${defaultVal}</div>` : ''}`;
+    optionsHtml = `<input class="qc-inline-input" type="${inputType}" placeholder="${question.placeholder || 'Type your answer...'}" value="${defaultVal}">
+      <button class="qc-chip qc-chip-rec" data-action="submit">confirm</button>
+      <button class="qc-chip qc-chip-ghost" data-action="skip">skip</button>`;
   }
 
-  const recOption = (question.options || []).find(o => o.recommended);
   card.innerHTML = `
-    <div class="qc-meta">
-      <span class="qc-step-tag">${stepLabel}</span>
-    </div>
-    <h3 class="qc-title">${question.title || question.text || 'Question'}</h3>
-    ${question.context ? `<p class="qc-context">${question.context}</p>` : ''}
-    <div class="qc-options">${optionsHtml}</div>
-    <div class="qc-footer">
-      ${recOption ? '<button class="qc-btn qc-btn-recommended" data-action="use-rec">Use Recommendation</button>' : ''}
-      <button class="qc-btn qc-btn-primary" data-action="submit">Confirm</button>
-      <button class="qc-btn qc-btn-ghost" data-action="skip">Skip</button>
-    </div>`;
+    <div class="qc-question-line">${question.title || question.text || 'Question'}</div>
+    <div class="qc-choices">${optionsHtml}${type === 'choice' || type === 'confirm' || type === 'multi' ? '<button class="qc-chip qc-chip-ghost" data-action="skip">skip</button>' : ''}</div>`;
 
-  // Wire option clicks
-  card.querySelectorAll('.qc-option').forEach(opt => {
-    opt.addEventListener('click', () => {
+  // Wire chip clicks — picking an option submits immediately
+  card.querySelectorAll('[data-action="pick"]').forEach(chip => {
+    chip.addEventListener('click', () => {
       if (type === 'multi') {
-        opt.classList.toggle('is-selected');
+        chip.classList.toggle('qc-chip-selected');
       } else {
-        card.querySelectorAll('.qc-option').forEach(o => o.classList.remove('is-selected'));
-        opt.classList.add('is-selected');
+        // Single choice — select and submit
+        card.querySelectorAll('[data-action="pick"]').forEach(c => c.classList.remove('qc-chip-selected'));
+        chip.classList.add('qc-chip-selected');
+        submitQuestionAnswer();
       }
     });
   });
-
-  // Wire footer buttons
   card.querySelector('[data-action="submit"]')?.addEventListener('click', () => submitQuestionAnswer());
-  card.querySelector('[data-action="use-rec"]')?.addEventListener('click', () => submitQuestionAnswer(true));
   card.querySelector('[data-action="skip"]')?.addEventListener('click', () => submitQuestionAnswer(false, true));
 
-  card.classList.remove('hidden');
+  flow.appendChild(card);
   $('thinkingCard')?.classList.add('hidden');
-  $('stepDoneCard')?.classList.add('hidden');
+  // Scroll to the question
+  card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 /** Submit the user's answer for the current question card */
@@ -1020,7 +1025,7 @@ function submitQuestionAnswer(useRec = false, skip = false) {
   const q = planningState.currentQuestion;
   if (!q) return;
 
-  const card = $('questionCard');
+  const card = document.querySelector('.question-card-active');
   const type = q.type || 'choice';
   let answerText = '';
   let answerLabel = '';
@@ -1033,20 +1038,20 @@ function submitQuestionAnswer(useRec = false, skip = false) {
     answerText = `I'll go with your recommendation: ${rec?.label || rec?.value || 'recommended option'}.`;
     answerLabel = rec?.label || 'Recommended';
   } else if (type === 'text' || type === 'number') {
-    const input = card?.querySelector('.qc-input-field');
+    const input = card?.querySelector('.qc-inline-input');
     answerText = input?.value || q.default || '';
     answerLabel = answerText || '(empty)';
     if (!answerText.trim()) { toast('Please enter a value', 'warning'); return; }
   } else if (type === 'multi') {
-    const selected = card?.querySelectorAll('.qc-option.is-selected') || [];
+    const selected = card?.querySelectorAll('.qc-chip-selected') || [];
     if (!selected.length) { toast('Select at least one option', 'warning'); return; }
-    const labels = [...selected].map(el => el.querySelector('.qc-option-label')?.textContent || el.dataset.value);
+    const labels = [...selected].map(el => el.textContent.replace(' ✓', '').trim());
     answerText = `Selected: ${labels.join(', ')}`;
     answerLabel = labels.join(', ');
   } else {
-    const selected = card?.querySelector('.qc-option.is-selected');
+    const selected = card?.querySelector('.qc-chip-selected');
     if (!selected) { toast('Select an option', 'warning'); return; }
-    answerLabel = selected.querySelector('.qc-option-label')?.textContent || selected.dataset.value;
+    answerLabel = selected.textContent.replace(' ✓', '').trim();
     answerText = answerLabel;
   }
 
@@ -1056,19 +1061,16 @@ function submitQuestionAnswer(useRec = false, skip = false) {
   // Send answer to agent
   wsSend({ type: 'chat_input', text: answerText });
 
-  // Hide question card, show thinking
-  card?.classList.add('hidden');
+  // Remove the active question card from the flow
+  document.querySelectorAll('.question-card-active').forEach(el => el.remove());
   planningState.currentQuestion = null;
   showThinking(true);
 }
 
 /** Add a collapsible analysis card to the analysis drawer */
 function appendAnalysisItem(title, body, stepId) {
-  const list = $('analysisList');
-  if (!list) return;
-
-  const empty = list.querySelector('.analysis-empty');
-  if (empty) empty.remove();
+  const flow = $('planningFlow');
+  if (!flow) return;
 
   const stepLabel = PLANNING_STEPS.find(s => s.id === stepId)?.label || stepId;
 
@@ -1078,7 +1080,7 @@ function appendAnalysisItem(title, body, stepId) {
   const header = document.createElement('div');
   header.className = 'analysis-item-header';
   header.innerHTML = `
-    <span class="analysis-item-caret">▼</span>
+    <span class="analysis-item-caret">▸</span>
     <span class="analysis-item-title">${title}</span>
     <span class="analysis-item-step">${stepLabel}</span>`;
 
@@ -1087,15 +1089,18 @@ function appendAnalysisItem(title, body, stepId) {
   try { bodyEl.innerHTML = marked.parse(body); }
   catch (e) { bodyEl.textContent = body; }
 
-  header.addEventListener('click', () => item.classList.toggle('is-open'));
+  header.addEventListener('click', () => {
+    item.classList.toggle('is-open');
+    header.querySelector('.analysis-item-caret').textContent = item.classList.contains('is-open') ? '▾' : '▸';
+  });
 
   item.appendChild(header);
   item.appendChild(bodyEl);
-  list.prepend(item);
+  flow.appendChild(item);
 
   planningState.analysis.push({ title, body, step: stepId });
-  const count = $('analysisCount');
-  if (count) count.textContent = planningState.analysis.length;
+  // Scroll to latest
+  item.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 /** Add a decision chip to the decisions sidebar */
@@ -1123,33 +1128,49 @@ function appendDecisionChip(id, title, answer, stepId) {
 
 /** Show the "step complete" card with advance button */
 function showStepDone(stepId) {
+  const flow = $('planningFlow');
+  if (!flow) return;
   const stepLabel = PLANNING_STEPS.find(s => s.id === stepId)?.label || stepId;
-  const card = $('stepDoneCard');
-  if (!card) return;
 
-  const body = card.querySelector('.sd-body');
-  if (body) body.innerHTML = `<strong>${stepLabel}</strong> is complete. Ready to move on?`;
+  const card = document.createElement('div');
+  card.className = 'step-done-card';
+  card.innerHTML = `
+    <span class="sd-icon">✓</span>
+    <span class="sd-body"><strong>${stepLabel}</strong> complete.</span>
+    <button class="btn btn-primary btn-sm" onclick="document.querySelectorAll('.step-done-card').forEach(e=>e.remove()); wsSend({type:'advance_step'}); showThinking(true);">Continue →</button>`;
 
-  card.classList.remove('hidden');
-  $('questionCard')?.classList.add('hidden');
+  flow.appendChild(card);
   $('thinkingCard')?.classList.add('hidden');
+  card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
-/** Show the final plan card */
+/** Show the final plan inline */
 function showPlanReady(planMarkdown) {
-  const card = $('planReadyCard');
-  if (!card) return;
+  const flow = $('planningFlow');
+  if (!flow) return;
 
-  const body = card.querySelector('.pr-body');
-  if (body) {
-    try { body.innerHTML = marked.parse(planMarkdown); }
-    catch (e) { body.textContent = planMarkdown; }
-  }
+  // Render plan as an analysis item
+  appendAnalysisItem('Final Plan', planMarkdown, 'plan');
 
-  card.classList.remove('hidden');
-  $('questionCard')?.classList.add('hidden');
-  $('stepDoneCard')?.classList.add('hidden');
+  // Add execute button
+  const card = document.createElement('div');
+  card.className = 'plan-ready-card';
+  card.innerHTML = `
+    <span class="pr-body">Plan ready — review above, then execute.</span>
+    <button class="btn btn-start btn-sm" id="execPlanBtnInline">▶ Execute Plan</button>`;
+  flow.appendChild(card);
+
+  card.querySelector('#execPlanBtnInline')?.addEventListener('click', () => {
+    const cfg = lastConfig || validateConfig();
+    if (!cfg) return;
+    clearTerminal();
+    term.writeln('\\x1b[32m[execute plan] Running agent on planned work…\\x1b[0m\\r\\n');
+    wsSend({ type: 'start_container', config: cfg, mode: 'normal' });
+    enterState('running');
+  });
+
   $('thinkingCard')?.classList.add('hidden');
+  card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 /** Reset wizard state and clear all UI zones */
@@ -1159,16 +1180,11 @@ function resetPlanningState() {
     step: 'requirements', completedSteps: [], agentTurnBuffer: '',
   };
   const dl = $('decisionsList');
-  if (dl) dl.innerHTML = '<div class="decisions-empty">No decisions yet</div>';
-  const al = $('analysisList');
-  if (al) al.innerHTML = '<div class="analysis-empty">No analysis yet</div>';
+  if (dl) dl.innerHTML = '<div class="decisions-empty">Choices you make appear here.</div>';
+  const flow = $('planningFlow');
+  if (flow) flow.innerHTML = '';
   const dc = $('decisionsCount');
   if (dc) dc.textContent = '0';
-  const ac = $('analysisCount');
-  if (ac) ac.textContent = '0';
-  $('questionCard')?.classList.add('hidden');
-  $('stepDoneCard')?.classList.add('hidden');
-  $('planReadyCard')?.classList.add('hidden');
   showThinking(false);
 }
 
@@ -1318,6 +1334,7 @@ $('homeBtn')?.addEventListener('click', () => {
 // ── Settings drawer ──────────────────────────────────────────────────────────
 
 $('settingsBtn')?.addEventListener('click', () => $('settingsDrawer')?.classList.remove('hidden'));
+$('headerSettingsBtn')?.addEventListener('click', () => $('settingsDrawer')?.classList.remove('hidden'));
 $('closeSettingsBtn')?.addEventListener('click', () => $('settingsDrawer')?.classList.add('hidden'));
 $('settingsBackdrop')?.addEventListener('click', () => $('settingsDrawer')?.classList.add('hidden'));
 
@@ -1661,7 +1678,7 @@ function showResumePrompt(meta, cfg) {
 
   $('rppResumeBtn').onclick = () => { prompt.classList.add('hidden'); launchPlan(cfg, true); };
   $('rppFreshBtn').onclick  = () => { prompt.classList.add('hidden'); launchPlan(cfg, false); };
-  $('rppCancelBtn').onclick = () => { prompt.classList.add('hidden'); pendingPlanConfig = null; };
+  $('rppCancelBtn').onclick = () => { prompt.classList.add('hidden'); pendingPlanConfig = null; setScreen('home'); };
 }
 
 function formatTimeAgo(date) {

@@ -436,11 +436,30 @@ npm run build:linux  # → dist/Copilot Agent.AppImage
 
 1. Fill in **Project Path** and **GitHub Token**
 2. Enter your task (or leave blank to auto-read from `TASK.md`)
-3. Click **🗺 Plan** — a container starts, the terminal becomes interactive
-4. Copilot reads your code and task, then asks clarifying questions in the terminal
-5. Reply in the terminal — Copilot refines the plan
+3. Click **🗺 Plan** — a planning chat session starts in the UI
+4. The planner builds a lightweight repository map, then pulls targeted code excerpts step-by-step
+5. When the agent shows **Needs Your Input**, answer inline on the chat message itself or reply in the chat box
 6. When satisfied, click **▶ Execute Plan** — a new container runs the plan autonomously
 7. Monitor progress in the live log view; a change report appears in `.copilot-reports/`
+
+### Maintainer notes — planning architecture
+
+The planning UX is intentionally different from execution mode. Keep these rules in mind when changing it:
+
+1. **Planning context is progressive, not a full code dump.**  
+   `ui/llm-plan.js` builds a repo index and repository map first, then injects a bounded **Planning Context Refresh** with targeted file excerpts per turn. This is deliberate so planning stays usable on large repos.
+
+2. **Refreshes should stay step-aware and bounded.**  
+   File selection changes by planning step (`requirements`, `codebase`, `gaps`, `approach`, `testing`, `plan`). Preserve that intent: do not revert to embedding the full codebase into every prompt.
+
+3. **The planner should separate required user decisions from general analysis.**  
+   The system prompt asks the model to use a dedicated `## Needs Your Input` section and to keep it to a small number of high-signal items. Preserve that structure when tweaking prompts.
+
+4. **Needs Your Input is interactive inside the agent message.**  
+   `ui/public/app.js` renders inline answer cards directly under the agent bubble. Each item has editable state, answered/waiting status, and a submit-all action on the same message. Prefer extending this inline interaction model rather than adding separate floating UX.
+
+5. **Document significant planning UX changes here.**  
+   When changing planning prompts, context selection, step flow, or inline response handling, add a short note in this section so future agents understand the rationale and continue the same design direction.
 
 ---
 
