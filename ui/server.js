@@ -757,7 +757,10 @@ wss.on('connection', ws => {
               (_full, quota) => {
                 agentTyping = false;
                 safeSend(ws, { type: 'chat_message_end' });
-                if (quota?.remaining != null) safeSend(ws, { type: 'quota_update', ...quota });
+                if (quota?.remaining != null) {
+                  devLog(`[quota] remaining=${quota.remaining} limit=${quota.limit} provider=${quota.provider}`);
+                  safeSend(ws, { type: 'quota_update', ...quota });
+                }
               },
               (err) => {
                 agentTyping = false;
@@ -771,7 +774,7 @@ wss.on('connection', ws => {
             // Fresh session — kick off Step 1
             safeSend(ws, { type: 'plan_step', stepId: 'requirements', done: false });
             const initialMsg =
-              'Begin Step 1: Requirements Clarification. Emit <STEP:requirements>, then one <ANALYSIS title="Task Understanding"> block restating the task in your own words and listing required outcomes, then either ONE <QUESTION> for a clarifying decision that materially affects direction, OR <STEP_DONE:requirements> if nothing is blocking. Remember the strict protocol — no text outside tagged blocks, one question max. Do NOT review the codebase yet; that is Step 2.';
+              'Begin Step 1: Requirements. Emit <STEP:requirements>. First, READ the task description carefully. Then emit one <ANALYSIS title="Task Understanding"> that lists: (1) what is CLEARLY specified in the task, (2) what is NOT specified but needed for autonomous execution. Then ask ONE <QUESTION> targeting a genuine gap — NOT something already stated in the task. Do not restate obvious scope. Do not review the codebase yet (that is Step 2).';
             safeSend(ws, { type: 'chat_typing' });
             agentTyping = true;
             llmPlan.sendPlanMessage(activePlanSessionId, initialMsg,
@@ -882,33 +885,39 @@ wss.on('connection', ws => {
 
         const stepNum = idx + 2;  // 1-indexed, next step
         const advanceMsg =
-          `The user has confirmed they are ready to move on. ` +
-          `Move to Step ${stepNum}: ${next.label}. ` +
-          `Emit <STEP:${next.id}> as the first line, then follow the strict protocol for this step: ` +
-          `<ANALYSIS> blocks for narrative, at most one <QUESTION> per reply, or <STEP_DONE:${next.id}> if no decisions are blocking.`;
+          `User is ready to move on. Start Step ${stepNum}: ${next.label}. ` +
+          `Emit <STEP:${next.id}> first line, then <ANALYSIS> covering this step's checklist thoroughly, then ONE <QUESTION>. ` +
+          `Remember: keep asking questions for this step until every decision on the checklist is resolved. Do NOT rush to <STEP_DONE>. ` +
+          (next.id === 'codebase' ? 'Start by summarizing the architecture and identifying which modules/files must be modified.' :
+           next.id === 'gaps' ? 'Enumerate every unknown, blocker, or ambiguity. Each needs its own resolution.' :
+           next.id === 'approach' ? 'Present the technical approach. Cover architecture, library picks, data models, error handling, auth, logging, rollout — one decision per reply.' :
+           next.id === 'testing' ? 'Define how the changes will be verified.' :
+           next.id === 'plan' ? 'Generate the final PLAN.md implementation steps.' : '');
 
-        llmPlan.sendPlanMessage(
-          activePlanSessionId,
-          advanceMsg,
+        llmPlan.sendPlanMessage(activePlanSessionId, advanceMsg,
           (chunk) => { safeSend(ws, { type: 'chat_chunk', text: chunk }); },
           (_full, quota) => {
             agentTyping = false;
             safeSend(ws, { type: 'chat_message_end' });
             if (quota?.remaining != null) safeSend(ws, { type: 'quota_update', ...quota });
-            const plan = llmPlan.extractFinalPlan(activePlanSessionId);
-            if (plan) {
-              const s = llmPlan.getSession(activePlanSessionId);
-              writePlanToProject(s?.config?.projectPath, plan);
-              safeSend(ws, { type: 'plan_complete' });
+            
+            // If it was the final plan, extract and save it
+            if (next.id === 'plan') {
+              const plan = llmPlan.extractFinalPlan(activePlanSessionId);
+              if (plan) {
+                writePlanToProject(sess.config?.projectPath, plan);
+                safeSend(ws, { type: 'plan_complete' });
+              }
             }
           },
           (err) => {
             agentTyping = false;
-            safeSend(ws, { type: 'chat_system', text: `⚠️ LLM API error: ${err.message}` });
+            devLog(`[advance error] ${err.message}`);
+            safeSend(ws, { type: 'chat_system', text: `⚠️ Advance Error: ${err.message}` });
             safeSend(ws, { type: 'chat_message_end' });
           },
           (stepId, done) => { safeSend(ws, { type: 'plan_step', stepId, done }); },
-          true  // internal — don't show in history as user message
+          true // internal prompt
         );
         break;
       }

@@ -3,488 +3,439 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Archon</title>
+  <title>Archon — AI Agent Orchestrator</title>
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
   <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
 </head>
-<body>
+<body class="app-layout">
 
 <!-- ── Header ──────────────────────────────────────────────────────────────── -->
-<header>
+<header class="app-header">
   <div class="header-left">
-    <button id="homeBtn" class="btn btn-ghost btn-sm hidden" title="Back to Home">← Home</button>
+    <button id="homeBtn" class="btn btn-ghost btn-xs header-home-btn hidden" title="Back to home">← Back</button>
     <span class="logo">Archon</span>
-    <span id="dockerStatus" class="badge badge-offline">● Connecting…</span>
+    <span id="dockerStatus" class="badge badge-offline">● Docker Connecting…</span>
+    <span id="imageStatus" class="badge badge-offline">● Image Checking…</span>
   </div>
   <div class="header-right">
     <span id="quotaBadge" class="quota-badge hidden" title="Remaining API requests"></span>
     <span id="dockerLabel" class="remote-label">Local Docker</span>
-    <button id="remoteBtn" class="btn btn-ghost btn-sm" title="Configure Docker host">⚙ Docker</button>
-    <button id="headerSettingsBtn" class="btn btn-ghost btn-sm" title="Settings">⚙ Settings</button>
+    <button id="devLogsBtn" class="btn btn-ghost btn-xs" title="View debug logs">🔍 Logs</button>
+    <button id="remoteBtn" class="btn btn-ghost btn-xs" title="Configure Docker host">⚙ Docker</button>
+    <button id="headerSettingsBtn" class="btn btn-ghost btn-xs" title="Global Settings">⚙ Settings</button>
   </div>
 </header>
 
-<!-- ── Main layout ─────────────────────────────────────────────────────────── -->
-<main>
+<!-- ── Main Dashboard ──────────────────────────────────────────────────────── -->
+<main class="app-main">
 
-  <!-- ════════════════════════════════════════════════════════════════════════
-       HOME SCREEN — shown when idle, replaces the old sidebar
-       ════════════════════════════════════════════════════════════════════════ -->
-  <div id="homeScreen" class="home-screen">
-
-    <!-- Project + Settings row -->
-    <div class="home-top">
-      <div class="home-project-selector">
-        <label class="home-label">Project</label>
-        <div class="home-project-row">
-          <input id="projectPath" type="text" class="home-project-input" placeholder="D:\Code\my-project">
-        </div>
+  <!-- LEFT SIDEBAR: Configuration -->
+  <aside class="sidebar-left">
+    <div class="sidebar-section">
+      <div class="section-header">
+        <span class="section-title">Project</span>
+      </div>
+      <div class="project-selector">
+        <input id="projectPath" type="text" class="input-field-dark" placeholder="D:\Code\my-project">
         <div id="projectStats" class="project-stats hidden"></div>
       </div>
-      <button id="settingsBtn" class="home-settings-btn" title="Settings">
-        <span class="settings-icon">⚙</span>
-      </button>
     </div>
 
-    <!-- Task input -->
-    <div class="home-task-area">
-      <label class="home-label">Task</label>
-      <textarea id="task" class="home-task-input" rows="4"
-        placeholder="Describe what the agent should do...&#10;Leave blank to auto-read from TASK.md in your project root."></textarea>
-      <div class="home-task-meta">
-        <label class="home-label-inline">
-          Session Name <span class="field-optional">(optional)</span>
-        </label>
-        <input id="sessionName" type="text" class="home-session-input" placeholder="e.g. login-flow">
-        <label class="home-label-inline" style="margin-left:12px">
-          Task File <span class="field-optional">(override)</span>
-        </label>
-        <input id="taskFile" type="text" class="home-session-input" placeholder="/workspace/SPRINT.md">
+    <!-- Collapsible Agent Section -->
+    <div class="sidebar-section collapsible" id="agentSection">
+      <div class="section-header toggle-trigger" onclick="toggleSidebarSection('agentSection')">
+        <span class="section-title">Agent</span>
+        <span class="toggle-icon">▾</span>
       </div>
-    </div>
-
-    <!-- Agent picker — visual cards -->
-    <div class="home-agent-picker">
-      <label class="home-label">Agent</label>
-      <div id="agentCards" class="agent-card-grid">
-        <!-- Populated by renderAgentCards() -->
-      </div>
-    </div>
-
-    <!-- CTA buttons -->
-    <div class="home-cta">
-      <button id="planBtn" class="btn btn-plan-cta" disabled title="Interactive planning session">
-        <span class="cta-icon">🗺</span>
-        <span class="cta-text">
-          <span class="cta-label">Plan First</span>
-          <span class="cta-desc">Review & approve before running</span>
-        </span>
-      </button>
-      <button id="startBtn" class="btn btn-start-cta" disabled title="Start autonomous run">
-        <span class="cta-icon">▶</span>
-        <span class="cta-text">
-          <span class="cta-label">Run Directly</span>
-          <span class="cta-desc">Execute task immediately</span>
-        </span>
-      </button>
-    </div>
-
-    <!-- Recent sessions -->
-    <div class="home-sessions">
-      <div class="home-sessions-header">
-        <span class="home-label">Sessions</span>
-        <button id="refreshContainersBtn" class="btn btn-ghost btn-xs" title="Refresh">↻</button>
-      </div>
-      <div id="sessionsList" class="sessions-list">
-        <div class="sessions-empty">No active sessions</div>
-      </div>
-    </div>
-
-    <!-- Hidden elements needed for backward compat -->
-    <div style="display:none">
-      <select id="agent" class="input-field">
-        <option value="copilot">GitHub Copilot CLI</option>
-        <option value="claude">Claude Code (Anthropic)</option>
-        <option value="gemini">Gemini CLI (Google)</option>
-        <option value="aider">Aider (multi-model)</option>
-        <option value="custom">Custom (OpenAI-compatible)</option>
-      </select>
-      <select id="containerSelect" class="input-field">
-        <option value="">— none —</option>
-      </select>
-      <div id="modeTag" class="mode-tag hidden"></div>
-    </div>
-  </div>
-
-  <!-- ════════════════════════════════════════════════════════════════════════
-       TERMINAL / EXECUTION PANEL
-       ════════════════════════════════════════════════════════════════════════ -->
-  <div id="terminalPanel" class="hidden">
-    <div id="terminalToolbar">
-      <span id="terminalTitle" class="terminal-title">Idle</span>
-      <div id="modelPicker" class="model-picker hidden"></div>
-      <div class="terminal-tools">
-        <button id="cancelBtn" class="btn btn-ghost btn-xs" disabled title="Graceful stop">⏹ Stop</button>
-        <button id="abortBtn" class="btn btn-ghost btn-xs" disabled title="Force kill">💀 Kill</button>
-        <button id="devLogsBtn" class="btn btn-ghost btn-xs" title="Show/hide dev logs panel">🔍 Dev</button>
-        <button id="clearTermBtn" class="btn btn-ghost btn-xs" title="Clear terminal">✕ Clear</button>
-        <button id="downloadLogsBtn" class="btn btn-ghost btn-xs" title="Download terminal logs">⬇ Logs</button>
-      </div>
-    </div>
-
-    <!-- Resume planning session prompt -->
-    <div id="resumePlanPrompt" class="rpp hidden">
-      <div class="rpp-icon">📂</div>
-      <div class="rpp-body">
-        <div class="rpp-title">Resume planning session?</div>
-        <div class="rpp-meta">
-          Saved <span id="rppTime"></span> · on step <strong id="rppStep"></strong> · <span id="rppCount"></span>
-        </div>
-        <div id="rppTask" class="rpp-task"></div>
-      </div>
-      <div class="rpp-actions">
-        <button id="rppResumeBtn" class="btn btn-primary btn-sm">↩ Resume</button>
-        <button id="rppFreshBtn"  class="btn btn-ghost  btn-sm">✦ Start Fresh</button>
-        <button id="rppCancelBtn" class="btn btn-ghost  btn-sm">✕</button>
-      </div>
-    </div>
-
-    <!-- Launch progress strip -->
-    <div id="launchProgress" class="launch-progress hidden">
-      <div class="lp-strip">
-        <span class="lp-spinner"></span>
-        <span class="lp-title" id="lpTitle">Launching…</span>
-        <ul id="lpSteps" class="lp-steps"></ul>
-      </div>
-    </div>
-
-    <div id="terminal"></div>
-
-    <!-- Planning wizard panel -->
-    <div id="chatPanel" class="planning-panel hidden">
-
-      <div id="progressRail" class="progress-rail">
-        <ol id="progressSteps" class="progress-steps"></ol>
-      </div>
-
-      <div class="planning-body">
-
-        <!-- LEFT: context + decisions -->
-        <aside class="decisions-panel">
-          <div class="panel-section">
-            <div class="panel-header">Session</div>
-            <div id="planningContext" class="panel-context">
-              <!-- Filled by JS with project/task/agent info -->
-            </div>
-          </div>
-          <div class="panel-section panel-section-grow">
-            <div class="panel-header">
-              Decisions <span id="decisionsCount" class="panel-count">0</span>
-            </div>
-            <div id="decisionsList" class="decisions-list">
-              <div class="decisions-empty">Choices appear here.</div>
-            </div>
-          </div>
-        </aside>
-
-        <!-- CENTER: scrollable content — analysis + inline questions -->
-        <main class="planning-content">
-          <div id="planningFlow" class="planning-flow">
-            <!-- Analysis items and question prompts appear here inline -->
-          </div>
-
-          <!-- Thinking indicator (at bottom of flow) -->
-          <div id="thinkingCard" class="thinking-card">
-            <div class="thinking-spinner"></div>
-            <span class="thinking-label">Analyzing…</span>
-          </div>
-
-          <!-- These are hidden containers — JS moves their content inline into planningFlow -->
-          <div id="questionCard" class="question-card hidden"></div>
-          <div id="stepDoneCard" class="step-done-card hidden">
-            <span class="sd-icon">✓</span>
-            <span class="sd-body">Step complete.</span>
-            <button id="advanceStepBtn" class="btn btn-primary btn-sm">Continue →</button>
-          </div>
-          <div id="planReadyCard" class="plan-ready-card hidden">
-            <span class="pr-body">Plan ready — review above, then execute.</span>
-            <button id="execPlanBtn" class="btn btn-start btn-sm">▶ Execute Plan</button>
-          </div>
-        </main>
-
-      </div>
-
-      <!-- Chat bar — direct child of chatPanel, always visible at bottom -->
-      <div class="planning-chat-bar">
-        <textarea id="chatInput" class="chat-input" rows="1"
-          placeholder="Ask anything… (Enter to send)"></textarea>
-        <button id="chatSendBtn" class="btn btn-primary chat-send-btn">Send</button>
-      </div>
-
-    </div>
-
-    <!-- Dev log panel -->
-    <div id="devLogPanel" class="dev-log-panel hidden">
-      <div class="dev-log-toolbar">
-        <span class="dev-log-label">Dev Logs</span>
-        <div class="dev-log-search-wrap">
-          <input id="devLogSearch" type="search" class="dev-log-search" placeholder="Search logs…" autocomplete="off" />
-        </div>
-        <div class="dev-log-actions">
-          <button id="expandDevLogsBtn" class="btn btn-ghost btn-xs" title="Expand to fullscreen">⛶</button>
-          <button id="downloadDevLogsBtn" class="btn btn-ghost btn-xs" title="Download dev logs">⬇</button>
-          <button id="clearDevLogsBtn" class="btn btn-ghost btn-xs" title="Clear dev logs">✕</button>
+      <div class="collapsible-content">
+        <div id="agentCards" class="agent-list-compact">
+          <!-- Populated by JS -->
         </div>
       </div>
-      <pre id="devLogContent" class="dev-log-content"></pre>
     </div>
-  </div>
+
+    <!-- Collapsible Auth Section -->
+    <div class="sidebar-section collapsible" id="authSection">
+      <div class="section-header toggle-trigger" onclick="toggleSidebarSection('authSection')">
+        <span class="section-title">Auth & Config</span>
+        <span class="toggle-icon">▾</span>
+      </div>
+      <div class="collapsible-content">
+        <div id="credentialsSummary" class="credentials-summary">
+          <div class="cred-item" data-agent="copilot">
+            <span class="cred-label">GitHub</span>
+            <span id="badge-copilot" class="cred-badge">?</span>
+          </div>
+          <div class="cred-item" data-agent="claude">
+            <span class="cred-label">Anthropic</span>
+            <span id="badge-claude" class="cred-badge">?</span>
+          </div>
+          <div class="cred-item" data-agent="gemini">
+            <span class="cred-label">Google</span>
+            <span id="badge-gemini" class="cred-badge">?</span>
+          </div>
+        </div>
+        <button id="sidebarSettingsBtn" class="btn btn-ghost btn-sm full-width" style="margin-top:12px">Configure Credentials</button>
+      </div>
+    </div>
+
+    <!-- Planning context (Visible only in Planning Mode) -->
+    <div id="planningContextSidebar" class="sidebar-section hidden">
+      <div class="section-header">
+        <span class="section-title">Session</span>
+      </div>
+      <div id="planningContextInfo" class="context-info-box"></div>
+    </div>
+  </aside>
+
+  <!-- CENTER AREA: Workspace -->
+  <section class="workspace">
+
+    <!-- STAGE 1: Task Input -->
+    <div id="taskSection" class="workspace-view">
+      <div class="task-container">
+        <label class="task-label">What should the agent do?</label>
+        <textarea id="task" class="task-input-large"
+          placeholder="Describe your goal... (e.g. 'Add a login page with OAuth support')"></textarea>
+
+        <div class="task-meta-grid">
+          <div class="meta-item">
+            <label class="meta-label">Session Name</label>
+            <input id="sessionName" type="text" class="input-field-dark" placeholder="optional-name">
+          </div>
+          <div class="meta-item">
+            <label class="meta-label">Task File (override)</label>
+            <input id="taskFile" type="text" class="input-field-dark" placeholder="/workspace/TASK.md">
+          </div>
+        </div>
+
+        <div class="task-actions">
+          <button id="planBtn" class="btn btn-plan-pro" disabled>
+            <span class="btn-icon-lg">🗺</span>
+            <span class="btn-text">
+              <span class="btn-title">Plan First</span>
+              <span class="btn-desc">Review architecture & steps</span>
+            </span>
+          </button>
+          <button id="startBtn" class="btn btn-start-pro" disabled>
+            <span class="btn-icon-lg">▶</span>
+            <span class="btn-text">
+              <span class="btn-title">Run Directly</span>
+              <span class="btn-desc">Execute autonomously</span>
+            </span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- STAGE 2: Planning Wizard -->
+    <div id="planningSection" class="workspace-view hidden">
+      <div class="planning-wizard">
+        <div id="planningFlow" class="planning-chat-flow">
+          <!-- Conversational content here -->
+        </div>
+
+        <div id="thinkingCard" class="thinking-status hidden">
+          <div class="thinking-dots"><span></span><span></span><span></span></div>
+          <span class="thinking-text">Agent is thinking...</span>
+          <span id="thinkingElapsed" class="thinking-elapsed"></span>
+          <button id="thinkingCancelBtn" class="btn btn-ghost btn-xs thinking-cancel hidden">Cancel</button>
+        </div>
+
+        <div class="planning-input-area">
+          <div class="planning-input-meta">
+            <select id="planningAgentSelect" class="inline-select" title="Switch agent"></select>
+            <select id="planningModelSelect" class="inline-select" title="Switch model"></select>
+          </div>
+          <div class="planning-input-row">
+            <textarea id="chatInput" class="chat-input-pro" placeholder="Reply or ask a question... (Enter to send)"></textarea>
+            <button id="chatSendBtn" class="btn btn-primary btn-chat-send">Send</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- STAGE 3: Execution (Terminal) -->
+    <div id="terminalSection" class="workspace-view hidden">
+      <div class="terminal-container">
+        <div class="terminal-header-pro">
+          <div class="terminal-title-area">
+            <span id="terminalTitle" class="terminal-title-text">Execution Log</span>
+            <div id="modelPicker" class="model-picker-pro hidden"></div>
+          </div>
+          <div class="terminal-actions-pro">
+            <button id="focusModeBtn" class="btn btn-ghost btn-xs" title="Toggle Focus Mode">⛶ Focus</button>
+            <button id="cancelBtn" class="btn btn-ghost btn-xs" disabled title="Graceful stop">⏹ Stop</button>
+            <button id="abortBtn" class="btn btn-ghost btn-xs" disabled title="Force kill">💀 Kill</button>
+            <button id="clearTermBtn" class="btn btn-ghost btn-xs" title="Clear terminal">✕ Clear</button>
+            <button id="downloadLogsBtn" class="btn btn-ghost btn-xs" title="Download terminal logs">⬇ Logs</button>
+          </div>
+        </div>
+
+        <!-- Launch progress strip -->
+        <div id="launchProgress" class="launch-strip hidden">
+          <div class="lp-content">
+            <span class="lp-spinner-pro"></span>
+            <span id="lpTitle" class="lp-status-text">Launching Agent…</span>
+            <div id="lpSteps" class="lp-steps-pro"></div>
+          </div>
+        </div>
+
+        <div id="terminal"></div>
+
+        <!-- Inline Plan Review (when plan is ready) -->
+        <div id="planReadyCard" class="plan-status-card hidden">
+          <div class="plan-card-body">
+            <span class="plan-card-icon">✅</span>
+            <div class="plan-card-text">
+              <span class="plan-card-title">Plan Ready</span>
+              <span class="plan-card-desc">Review the steps above and proceed to execution.</span>
+            </div>
+          </div>
+          <button id="execPlanBtn" class="btn btn-start btn-sm">▶ Execute Plan</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- RESUME PROMPT OVERLAY -->
+    <div id="resumePlanPrompt" class="resume-prompt-overlay hidden">
+      <div class="resume-card">
+        <div class="resume-card-header">Existing Session Found</div>
+        <div class="resume-card-body">
+          <div class="resume-info">
+            <span class="resume-label">Step:</span> <span id="rppStep" class="resume-value">-</span><br>
+            <span class="resume-label">Saved:</span> <span id="rppTime" class="resume-value">-</span>
+          </div>
+          <div id="rppTask" class="resume-task-preview"></div>
+        </div>
+        <div class="resume-card-footer">
+          <button id="rppResumeBtn" class="btn btn-primary btn-sm">Resume Session</button>
+          <button id="rppFreshBtn" class="btn btn-ghost btn-sm">Start Fresh</button>
+        </div>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- RIGHT SIDEBAR: Status & History -->
+  <aside class="sidebar-right">
+    <div class="sidebar-section">
+      <div class="section-header">
+        <span class="section-title">Active Sessions</span>
+        <button id="refreshContainersBtn" class="btn-icon-sm" title="Refresh">↻</button>
+      </div>
+      <div id="sessionsList" class="sessions-list-pro">
+        <div class="sessions-empty">No active agents</div>
+      </div>
+    </div>
+
+    <div id="planningProgressRail" class="sidebar-section hidden">
+      <div class="section-header">
+        <span class="section-title">Plan Progress</span>
+      </div>
+      <ol id="progressSteps" class="progress-rail-pro">
+        <!-- Populated by JS -->
+      </ol>
+    </div>
+
+    <div id="decisionsSidebar" class="sidebar-section hidden">
+      <div class="section-header">
+        <span class="section-title">Decisions</span>
+        <span id="decisionsCount" class="badge-count">0</span>
+      </div>
+      <div id="decisionsList" class="decisions-list-pro">
+        <div class="decisions-empty">Decisions will appear here.</div>
+      </div>
+    </div>
+
+  </aside>
 
 </main>
 
-<!-- ── Status bar ──────────────────────────────────────────────────────────── -->
-<footer id="statusBar">
+<!-- ── Footer ──────────────────────────────────────────────────────────────── -->
+<footer class="app-footer">
   <span id="statusMsg">Ready</span>
   <span id="activeContainerLabel"></span>
 </footer>
 
-<!-- ════════════════════════════════════════════════════════════════════════════
-     SETTINGS DRAWER — slides in from right
-     ════════════════════════════════════════════════════════════════════════════ -->
+<!-- ── Settings Drawer (Slide-out) ─────────────────────────────────────────── -->
 <div id="settingsDrawer" class="drawer hidden">
   <div class="drawer-backdrop" id="settingsBackdrop"></div>
   <div class="drawer-panel">
     <div class="drawer-header">
-      <h3 class="drawer-title">Settings</h3>
-      <div class="drawer-header-actions">
-        <button id="clearFormBtn" class="btn btn-ghost btn-xs" title="Clear all saved settings">Clear All</button>
-        <button id="closeSettingsBtn" class="btn btn-ghost btn-sm">✕</button>
-      </div>
+      <h3 class="drawer-title">Configuration</h3>
+      <button id="closeSettingsBtn" class="btn btn-ghost btn-sm">✕</button>
     </div>
 
-    <!-- Tabs -->
     <div class="drawer-tabs">
       <button class="drawer-tab is-active" data-tab="credentials">Credentials</button>
       <button class="drawer-tab" data-tab="instructions">Instructions</button>
+      <button class="drawer-tab" data-tab="mcp">MCP Tools</button>
       <button class="drawer-tab" data-tab="git">Git & SDK</button>
-      <button class="drawer-tab" data-tab="mcp">MCP Servers</button>
-      <button class="drawer-tab" data-tab="docker">Docker</button>
+      <button class="drawer-tab" data-tab="docker">System</button>
     </div>
 
     <div class="drawer-body">
-
-      <!-- ── Credentials tab ──────────────────────────────────────────────── -->
+      <!-- Standard credentials/settings fields (will be populated/wired in app.js) -->
       <div class="drawer-tab-panel is-active" data-panel="credentials">
-        <input type="text" style="display:none" autocomplete="username" aria-hidden="true">
-
-        <div id="agentFields-copilot" class="agent-fields">
-          <h4 class="drawer-section-title" style="color:var(--green)">GitHub Copilot</h4>
-          <label class="field-label">GitHub Token <span class="required">*</span></label>
-          <input id="ghToken" type="password" class="input-field" placeholder="github_pat_…" autocomplete="new-password">
-          <div class="field-help token-warning">
-            Must be a <strong>fine-grained PAT</strong> with Models + Repositories + User permissions.<br>
-            <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" class="help-link">Create token ↗</a>
-          </div>
-          <label class="field-label">Model <button type="button" class="btn-fetch-models" data-agent="copilot" title="Fetch">↻</button></label>
+        <div id="agentFields-copilot" class="agent-fields-group">
+          <h4 class="field-group-title">GitHub Copilot</h4>
+          <label class="field-label">Token <span class="required">*</span></label>
+          <input id="ghToken" type="password" class="input-field" placeholder="github_pat_…">
+          <label class="field-label">Model</label>
           <select id="copilotModel" class="input-field">
-            <option value="gpt-4o">gpt-4o (default)</option>
-            <option value="gpt-4o-mini">gpt-4o-mini (faster)</option>
-            <option value="o1-mini">o1-mini (reasoning)</option>
+            <option value="gpt-4o">gpt-4o</option>
+            <option value="gpt-4o-mini">gpt-4o-mini</option>
+            <option value="o1-mini">o1-mini</option>
             <option value="Meta-Llama-3.1-405B-Instruct">Llama 3.1 405B</option>
             <option value="Mistral-Large-2411">Mistral Large</option>
           </select>
         </div>
-
-        <div id="agentFields-claude" class="agent-fields" style="display:none">
-          <h4 class="drawer-section-title" style="color:var(--orange)">Claude (Anthropic)</h4>
+        <div id="agentFields-claude" class="agent-fields-group">
+          <h4 class="field-group-title">Claude (Anthropic)</h4>
           <label class="field-label">API Key <span class="required">*</span></label>
-          <input id="anthropicApiKey" type="password" class="input-field" placeholder="sk-ant-…" autocomplete="new-password">
-          <p class="field-help"><a href="https://console.anthropic.com/settings/keys" target="_blank" class="help-link">Get key ↗</a></p>
-          <label class="field-label">Model <button type="button" class="btn-fetch-models" data-agent="claude" title="Fetch">↻</button></label>
+          <input id="anthropicApiKey" type="password" class="input-field" placeholder="sk-ant-…">
+          <label class="field-label">Model</label>
           <select id="claudeModel" class="input-field">
-            <option value="claude-opus-4-5">Claude Opus (most capable)</option>
-            <option value="claude-sonnet-4-5">Claude Sonnet (balanced)</option>
-            <option value="claude-haiku-4-5">Claude Haiku (fastest)</option>
-            <option value="claude-3-5-sonnet-20241022">Claude 3.5 Sonnet</option>
+            <option value="claude-opus-4-5">claude-opus-4-5</option>
+            <option value="claude-sonnet-4-5">claude-sonnet-4-5</option>
+            <option value="claude-haiku-4-5">claude-haiku-4-5</option>
+            <option value="claude-3-5-sonnet-20241022">claude-3.5-sonnet</option>
           </select>
         </div>
-
-        <div id="agentFields-gemini" class="agent-fields" style="display:none">
-          <h4 class="drawer-section-title" style="color:var(--blue)">Gemini (Google)</h4>
+        <div id="agentFields-gemini" class="agent-fields-group">
+          <h4 class="field-group-title">Gemini (Google)</h4>
           <label class="field-label">API Key <span class="required">*</span></label>
-          <input id="geminiApiKey" type="password" class="input-field" placeholder="AIza…" autocomplete="new-password">
-          <p class="field-help"><a href="https://aistudio.google.com/app/apikey" target="_blank" class="help-link">Get key ↗</a></p>
+          <input id="geminiApiKey" type="password" class="input-field" placeholder="AIza…">
           <label class="field-label">Model</label>
           <select id="geminiModel" class="input-field">
-            <option value="gemini-2.0-flash">Gemini 2.0 Flash (default)</option>
-            <option value="gemini-1.5-pro">Gemini 1.5 Pro (large context)</option>
-            <option value="gemini-1.5-flash">Gemini 1.5 Flash (faster)</option>
-            <option value="gemini-2.0-flash-thinking-exp">Gemini 2.0 Flash Thinking</option>
+            <option value="gemini-2.0-flash">gemini-2.0-flash</option>
+            <option value="gemini-1.5-pro">gemini-1.5-pro</option>
+            <option value="gemini-1.5-flash">gemini-1.5-flash</option>
+            <option value="gemini-2.0-flash-thinking-exp">gemini-2.0-flash-thinking</option>
           </select>
         </div>
-
-        <div id="agentFields-aider" class="agent-fields" style="display:none">
-          <h4 class="drawer-section-title" style="color:var(--purple)">Aider (multi-model)</h4>
-          <p class="field-help">Provide at least one API key. Model is auto-detected.</p>
-          <label class="field-label">OpenAI API Key</label>
-          <input id="openaiApiKey" type="password" class="input-field" placeholder="sk-…" autocomplete="new-password">
-          <label class="field-label">Anthropic API Key</label>
-          <input id="anthropicApiKey2" type="password" class="input-field" placeholder="sk-ant-…" autocomplete="new-password">
-          <label class="field-label">Gemini API Key</label>
-          <input id="geminiApiKey2" type="password" class="input-field" placeholder="AIza…" autocomplete="new-password">
-          <label class="field-label">Model override <span class="field-optional">(optional)</span></label>
-          <input id="aiderModel" type="text" class="input-field" placeholder="gpt-4o · claude-3-5-sonnet">
-          <p class="field-help"><a href="https://aider.chat/docs/llms.html" target="_blank" class="help-link">Supported models ↗</a></p>
+        <div id="agentFields-aider" class="agent-fields-group">
+          <h4 class="field-group-title">Aider</h4>
+          <label class="field-label">OpenAI Key</label>
+          <input id="openaiApiKey" type="password" class="input-field">
+          <label class="field-label">Anthropic Key</label>
+          <input id="anthropicApiKey2" type="password" class="input-field">
+          <label class="field-label">Gemini Key</label>
+          <input id="geminiApiKey2" type="password" class="input-field">
         </div>
-
-        <div id="agentFields-custom" class="agent-fields" style="display:none">
-          <h4 class="drawer-section-title" style="color:var(--text-muted)">Custom (OpenAI-compatible)</h4>
-          <p class="field-help">Any OpenAI-compatible endpoint: Together, Groq, OpenRouter, Ollama, etc.</p>
-          <label class="field-label">API Base URL <span class="required">*</span></label>
-          <input id="customApiBase" type="text" class="input-field" placeholder="https://api.together.xyz/v1">
-          <label class="field-label">API Key <span class="required">*</span></label>
-          <input id="customApiKey" type="password" class="input-field" placeholder="sk-…" autocomplete="new-password">
-          <label class="field-label">Model Name <span class="required">*</span></label>
-          <input id="customModel" type="text" class="input-field" placeholder="meta-llama/Llama-3-70b-chat-hf">
-        </div>
-
-        <span id="credentialsHint" class="cg-hint"></span>
-        <div id="agentCard" class="agent-card"></div>
       </div>
-
-      <!-- ── Instructions tab ─────────────────────────────────────────────── -->
+      <!-- Additional panels for Instructions, MCP, etc. -->
       <div class="drawer-tab-panel" data-panel="instructions">
-        <label class="field-label">Instructions Repo</label>
+        <label class="field-label">System Instructions Repo</label>
         <input id="instructionsRepo" type="text" class="input-field" placeholder="owner/repo">
         <label class="field-label">Instructions File</label>
         <input id="instructionsFile" type="text" class="input-field" placeholder="copilot-instructions.md">
         <label class="field-label">Branch</label>
         <input id="instructionsBranch" type="text" class="input-field" placeholder="main">
-        <label class="checkbox-label">
-          <input id="useHostInstructions" type="checkbox" checked>
-          Load from <code>~/.copilot/</code> on this machine
-        </label>
+        <label class="checkbox-label"><input id="useHostInstructions" type="checkbox" checked> Load from local machine</label>
       </div>
-
-      <!-- ── Git & SDK tab ────────────────────────────────────────────────── -->
+      <div class="drawer-tab-panel" data-panel="mcp">
+        <p class="field-help">Configure MCP tools for agents.</p>
+        <div id="mcpServerList" class="mcp-server-list"></div>
+        <button id="addMcpServerBtn" class="btn btn-ghost full-width">+ Add Tool</button>
+      </div>
       <div class="drawer-tab-panel" data-panel="git">
         <label class="field-label">Git Name</label>
         <input id="gitUserName" type="text" class="input-field" placeholder="Archon">
         <label class="field-label">Git Email</label>
-        <input id="gitUserEmail" type="text" class="input-field" placeholder="copilot@example.com">
+        <input id="gitUserEmail" type="text" class="input-field" placeholder="archon@example.com">
         <label class="field-label">Flutter Version</label>
         <input id="flutterVersion" type="text" class="input-field" placeholder="3.24.5">
         <label class="field-label">Go Version</label>
         <input id="goVersion" type="text" class="input-field" placeholder="1.22.5">
-        <h4 class="drawer-section-title" style="margin-top:16px">Firebase Test Lab</h4>
-        <label class="field-label">Project ID</label>
-        <input id="firebaseProjectId" type="text" class="input-field" placeholder="my-app-12345">
-        <label class="field-label">SA Key File (host path)</label>
-        <input id="gcloudKeyFile" type="text" class="input-field" placeholder="C:\keys\firebase-sa-key.json">
-        <label class="field-label">Test Device</label>
-        <input id="firebaseTestDevice" type="text" class="input-field" placeholder="model=oriole,version=33,locale=en,orientation=portrait">
       </div>
-
-      <!-- ── MCP Servers tab ──────────────────────────────────────────────── -->
-      <div class="drawer-tab-panel" data-panel="mcp">
-        <p class="field-help" style="margin-bottom:12px">
-          Configure MCP servers that agents can use for tool access during planning and execution.
-        </p>
-        <div id="mcpServerList" class="mcp-server-list"></div>
-        <button id="addMcpServerBtn" class="btn btn-ghost full-width" style="margin-top:8px">+ Add MCP Server</button>
-      </div>
-
-      <!-- ── Docker tab ───────────────────────────────────────────────────── -->
       <div class="drawer-tab-panel" data-panel="docker">
-        <div class="section-header" style="margin-bottom:8px">
-          <span class="section-title">Docker Image</span>
-          <span id="imageStatus" class="badge badge-offline">Checking…</span>
+        <div class="section-header">
+          <span class="section-title">Docker Agent Image</span>
         </div>
-        <button id="buildImageBtn" class="btn btn-ghost full-width">Build Image</button>
+        <button id="buildImageBtn" class="btn btn-ghost full-width">Rebuild Image</button>
       </div>
+    </div>
 
+    <div class="drawer-footer">
+      <button id="clearFormBtn" class="btn btn-ghost btn-xs">Reset All Settings</button>
     </div>
   </div>
 </div>
 
-<!-- ── Remote Docker Modal ─────────────────────────────────────────────────── -->
+<!-- ── Modals ─────────────────────────────────────────────────────────────── -->
 <div id="remoteModal" class="modal hidden">
   <div class="modal-backdrop" id="remoteModalBackdrop"></div>
-  <div class="modal-content">
-    <h3 class="modal-title">Docker Host</h3>
+  <div class="modal-content-pro">
+    <h3 class="modal-title">Docker Connectivity</h3>
     <div class="radio-group">
       <label class="radio-label"><input type="radio" name="dockerType" value="local" checked> Local</label>
       <label class="radio-label"><input type="radio" name="dockerType" value="ssh"> SSH</label>
       <label class="radio-label"><input type="radio" name="dockerType" value="tcp"> TCP</label>
     </div>
-    <div id="sshFields" class="docker-fields hidden">
+    <!-- SSH fields -->
+    <div id="sshFields" class="docker-fields-group hidden">
       <label class="field-label">Host</label>
-      <input id="sshHost" type="text" class="input-field" placeholder="hostname or IP">
-      <div class="field-row">
-        <div class="field-col">
-          <label class="field-label">Port</label>
-          <input id="sshPort" type="number" class="input-field" value="22">
-        </div>
-        <div class="field-col">
-          <label class="field-label">Username</label>
-          <input id="sshUser" type="text" class="input-field" placeholder="ubuntu">
-        </div>
-      </div>
-      <label class="field-label">SSH Key File</label>
-      <input id="sshKeyPath" type="text" class="input-field" placeholder="C:\Users\you\.ssh\id_rsa">
-      <label class="field-label">Password (if no key)</label>
-      <input id="sshPassword" type="password" class="input-field" autocomplete="new-password">
+      <input id="sshHost" type="text" class="input-field-dark">
+      <label class="field-label">User</label>
+      <input id="sshUser" type="text" class="input-field-dark">
+      <label class="field-label">Key Path</label>
+      <input id="sshKeyPath" type="text" class="input-field-dark">
     </div>
-    <div id="tcpFields" class="docker-fields hidden">
-      <label class="field-label">Host</label>
-      <input id="tcpHost" type="text" class="input-field" placeholder="192.168.1.100">
-      <label class="field-label">Port</label>
-      <input id="tcpPort" type="number" class="input-field" value="2375">
+    <!-- TCP fields -->
+    <div id="tcpFields" class="docker-fields-group hidden">
+      <label class="field-label">Endpoint</label>
+      <input id="tcpHost" type="text" class="input-field-dark" placeholder="192.168.1.100:2375">
     </div>
-    <div class="info-box">
-      <strong>SSH Tunnel (simplest)</strong><br>
-      <code>ssh -L 3000:localhost:3000 user@remote-host</code><br>
-      Then open <code>http://localhost:3000</code>
-    </div>
-    <div id="dockerTestResult" class="test-result hidden"></div>
     <div class="modal-footer">
-      <button id="testDockerBtn" class="btn btn-ghost">Test</button>
-      <button id="connectDockerBtn" class="btn btn-start">Connect</button>
-      <button id="cancelDockerBtn" class="btn btn-cancel">Cancel</button>
+      <button id="connectDockerBtn" class="btn btn-primary">Connect</button>
+      <button id="cancelDockerBtn" class="btn btn-ghost">Cancel</button>
     </div>
   </div>
 </div>
 
-<!-- ── Build Image Modal ───────────────────────────────────────────────────── -->
 <div id="buildModal" class="modal hidden">
   <div class="modal-backdrop" id="buildModalBackdrop"></div>
-  <div class="modal-content modal-wide">
-    <h3 class="modal-title">Building Docker Image</h3>
-    <div id="buildOutput" class="build-output"></div>
+  <div class="modal-content-pro modal-wide">
+    <h3 class="modal-title">Building Image</h3>
+    <pre id="buildOutput" class="build-log-view"></pre>
     <div class="modal-footer">
       <button id="closeBuildBtn" class="btn btn-ghost" disabled>Close</button>
     </div>
   </div>
 </div>
 
-<!-- Dev logs fullscreen modal -->
+<!-- Fullscreen Dev Logs -->
 <div id="devLogsModal" class="modal hidden">
   <div class="modal-backdrop" id="devLogsModalBackdrop"></div>
-  <div class="modal-box modal-fullscreen">
-    <div class="modal-header">
-      <span>Dev Logs</span>
-      <div class="dev-log-search-wrap" style="flex:1;margin:0 12px;">
-        <input id="devLogSearchModal" type="search" class="dev-log-search" placeholder="Search logs…" autocomplete="off" />
+  <div class="modal-fullscreen-pro">
+    <div class="modal-header-pro">
+      <span>System Logs</span>
+      <div class="header-actions">
+        <input id="devLogSearchModal" type="text" class="search-input-xs" placeholder="Search logs...">
+        <button id="closeDevLogsModalBtn" class="btn btn-ghost btn-sm">✕ Close</button>
       </div>
-      <button id="downloadDevLogsModalBtn" class="btn btn-ghost btn-xs" title="Download">⬇</button>
-      <button id="closeDevLogsModalBtn" class="btn btn-ghost" style="margin-left:8px">✕ Close</button>
     </div>
-    <pre id="devLogContentModal" class="dev-log-content dev-log-content-modal"></pre>
+    <pre id="devLogContentModal" class="dev-log-view"></pre>
   </div>
 </div>
+
+<div id="toast" class="toast-pro hidden"></div>
+
+<!-- Hidden fields for backward compat -->
+<select id="agent" style="display:none">
+  <option value="copilot">Copilot</option>
+  <option value="claude">Claude</option>
+  <option value="gemini">Gemini</option>
+  <option value="aider">Aider</option>
+  <option value="custom">Custom</option>
+</select>
+<select id="containerSelect" style="display:none"></select>
+<div id="modeTag" style="display:none"></div>
 
 <script src="app.js"></script>
 </body>

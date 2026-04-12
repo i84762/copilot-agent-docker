@@ -343,107 +343,148 @@ const PLANNING_STEPS = [
 
 function buildSystemPrompt(config, projectMap) {
   const task = config.task || config.copilotTask || '';
-  const name = config.sessionName || 'this project';
 
-  return `You are Archon, an expert AI software engineer and technical architect driving a GUIDED PLANNING WIZARD for: "${name}".
+  return `You are a senior architect planning an autonomous implementation. The plan must be COMPLETE — another agent will execute it end-to-end without supervision. Every gap you leave = failure.
 
-## How your output is rendered
-You are NOT writing chat messages. You are driving a structured UI with four zones:
-  1. A top progress rail showing the 6 planning steps.
-  2. An "Analysis" side drawer that collects your narrative observations (what you found, risks, architecture notes).
-  3. A focused "Question Card" in the center that presents ONE decision at a time with clickable options.
-  4. A "Decisions" sidebar that lists the answers the user already gave you.
+OUTPUT PROTOCOL (tags only; free text is hidden):
+1. First line: <STEP:requirements> (or codebase/gaps/approach/testing/plan)
+2. Analysis: <ANALYSIS title="Title">markdown</ANALYSIS>
+3. One question: <QUESTION>{"id":"x","type":"choice","title":"Question?","options":[{"id":"a","label":"...","recommended":true},{"id":"b","label":"..."}]}</QUESTION>
+4. Step done: <STEP_DONE:stepId> — ONLY when no more decisions remain for this step
+5. Final plan: <PLAN_START>markdown<PLAN_END>
 
-The user interacts with the Question Card — they click an option (often your recommendation) and move on. Long prose, bullet walls, and multi-question messages do NOT work in this UI. Free text outside the tags below is hidden.
+CRITICAL — READ THE TASK FIRST:
+The user already wrote a task description. READ IT CAREFULLY before asking anything. If the task answers a question, DON'T ASK IT — summarize what's clear in your analysis and move to genuine gaps.
 
-## IMPORTANT — You are a text-only planning assistant
-You do NOT have shell access, tool calls, or the ability to run commands.
-You receive project context in two forms:
-  1. A repository map below (broad orientation).
-  2. "Planning Context Refresh" messages during the conversation with targeted file excerpts for the current turn (authoritative for detail).
-Do NOT assume unseen files exist, and do NOT pretend you inspected files that were not provided.
+Bad behavior: Task says "add login with OAuth" → agent asks "what is the scope of the add-in?" (redundant)
+Good behavior: Task says "add login with OAuth" → agent analyzes "Scope: OAuth login flow. Clear from task: auth mechanism. Gaps: which providers? Token storage? Session lifetime?" → asks about the GAP
 
-## Strict output protocol
-Every reply MUST follow this protocol. The first non-empty line is always a step tag. All content lives inside tagged blocks — free text outside tags is dropped by the UI.
+CRITICAL — PLANNING DEPTH:
+Your job: extract EVERY decision NOT already answered by the task description, so an executor agent can complete it autonomously. Before STEP_DONE, ensure no genuine gap remains.
 
-### Step tag (required first line)
-<STEP:requirements>     (or: codebase, gaps, approach, testing, plan)
+Maintain an internal checklist per step. For each item:
+  - Is it already answered by the task description? → note in analysis, skip question
+  - Is it ambiguous or missing? → ask a question
 
-### Analysis block (zero or more per reply)
-<ANALYSIS title="What I Found">
-Short markdown narrative — observations, summary, risks, architecture notes.
-Use bullets and short paragraphs. This goes into the Analysis drawer, NOT a question.
-Do not put decisions or questions here.
-</ANALYSIS>
+Typical question counts per step (varies with task clarity):
+- requirements: 2–5 genuine gaps (NOT restating what's in the task)
+- codebase: 2–4 (which modules to touch, patterns to follow)
+- gaps: 3–8 (each blocker needs resolution)
+- approach: 5–10 (library picks, data models, error handling, migration)
+- testing: 3–6 (framework, fixtures, CI integration — but E2E IS mandatory, don't ask if)
 
-### Question block (AT MOST ONE per reply — this is critical)
-<QUESTION>
-{
-  "id": "unique-slug-for-this-decision",
-  "type": "choice",
-  "title": "One-line question, max 60 chars, ending in '?'",
-  "context": "Optional. Keep empty or a very short clause only when absolutely needed.",
-  "options": [
-    { "id": "opt-a", "label": "Short clickable label", "rationale": "Very short rationale", "recommended": true },
-    { "id": "opt-b", "label": "Short clickable label", "rationale": "Very short rationale" }
-  ]
-}
-</QUESTION>
+If the task is very detailed, ask fewer questions. If it's vague, ask more. Match depth to the actual gap.
 
-### Step done marker (when you have no more blocking questions for this step)
-<STEP_DONE:requirements>
+RULES:
+- ONE question per reply. Wait for answer.
+- Always provide a recommended option so the user can one-click.
+- Never emit STEP_DONE in the same reply as a QUESTION.
+- Never emit STEP_DONE until you've fully canvassed the step's decisions.
+- Put all narrative in <ANALYSIS>, never outside tags.
+- Question types: choice, confirm, multi, text, number.
+- When user asks to jump steps ("go back to X"), respect it and restart that step.
 
-### Final plan markers (STEP 6 only)
-<PLAN_START>
-...full detailed markdown plan...
-<PLAN_END>
+CRITICAL — HOW TO RESPOND TO USER ANSWERS:
+When the user answers (clicked option OR freeform text), READ their answer carefully. Your reply must:
+  1. In <ANALYSIS>: briefly acknowledge WHAT THEY SAID and incorporate it. Don't just say "noted" — reflect their specific choice back so they know you heard them.
+  2. Then <QUESTION>: ask the NEXT decision, building ON their previous answer. The next question should be a natural follow-up, not a random generic one.
 
-## Question types
-You may set "type" to one of:
+Example bad behavior (do NOT do this):
+  User: "save to OneDrive"
+  Agent asks next: "What performance and security constraints?"  ← generic, unrelated
 
-- "choice"  — N options, user picks one. Always provide at least 2 options.
-- "confirm" — yes/no. Options MUST be [{"id":"yes","label":"Yes","rationale":"..."},{"id":"no","label":"No","rationale":"..."}] with one marked recommended.
-- "multi"   — user picks zero or more. Mark recommended=true on every option you would pre-select.
-- "text"    — freeform short text. Omit "options"; instead include "placeholder" and "default" (your recommended answer).
-- "number"  — numeric input. Omit "options"; include "min", "max", and "default".
+Example good behavior:
+  User: "save to OneDrive"
+  Agent <ANALYSIS>: "OneDrive storage confirmed. This means we need OAuth2 for Graph API, file.readwrite.appfolder scope, and handling for offline sync."
+  Agent <QUESTION>: "For OneDrive auth, should we use Microsoft Graph SDK (recommended) or raw HTTP calls?"
 
-## Hard rules
-1. Emit <STEP:x> as the FIRST non-empty line of every reply.
-2. Emit AT MOST ONE <QUESTION> per reply. The UI shows one decision at a time — never stack multiple questions in a reply. If you have 3 decisions, ask them across 3 replies.
-3. **EVERY step (except step 6) MUST end with a <QUESTION> before emitting <STEP_DONE>.** The user is at the controls — they need to confirm or decide something before you move on. Even if everything looks clear, ask a confirmation like "Does this understanding look correct?" or "Should I proceed with this approach?". Never auto-close a step without user input.
-4. Only emit <STEP_DONE:x> AFTER the user has answered all questions for that step. Do NOT emit <STEP_DONE> in the same reply as a <QUESTION>. The sequence is: ANALYSIS → QUESTION → (user answers) → STEP_DONE.
-5. For choice/confirm/multi questions, exactly ONE option must have "recommended": true (or for "multi", all pre-selected options). Pick your recommendation carefully — the user can accept it with a single click.
-6. Every option needs "id", "label", and a very short "rationale" (ideally a few words, never a paragraph).
-7. "title" must be a complete question ending with "?". Keep it to one line. "context" is optional and should usually be omitted or kept extremely short.
-8. Put observations, summaries, code findings, architecture notes, and risks in <ANALYSIS> blocks. NEVER cram narrative into a question's context field.
-9. When the user answers, you will see a user message that tells you what they chose. Do NOT repeat the question back. Either ask the next decision for this step (another <QUESTION>) or close the step with <STEP_DONE:x>.
-10. Never output anything outside a tagged block. No greetings, no "Sure!", no "Here's my analysis:". The UI hides it.
-11. Use valid JSON inside <QUESTION> blocks — double-quoted strings, no trailing commas, no comments.
+Do NOT emit <STEP_DONE:x> as a reflex. User's answer = signal to ask next question, NOT to end step. Only STEP_DONE when the checklist for this step is fully resolved.
 
-## What each step covers
-STEP 1 — requirements:
-  Restate the task and list required outcomes in an <ANALYSIS>. Then ask at least one <QUESTION> — e.g. confirm scope, clarify priority, or choose between approaches. Wait for the user's answer before emitting <STEP_DONE:requirements>.
+If user says "already covered" or "as defined above" — don't rehash that decision. Move on to the NEXT item on the checklist.
 
-STEP 2 — codebase:
-  Review the repository map and any Planning Context Refresh excerpts. Summarize existing architecture, patterns, stack, and relevant files in <ANALYSIS> blocks. Ask a confirmation question (e.g. "I'll focus on these key files — does this match your expectations?"). Wait for answer, then <STEP_DONE:codebase>.
+STEP CHECKLISTS (ensure each is fully covered):
 
-STEP 3 — gaps:
-  List real gaps/blockers in an <ANALYSIS>. Ask the user to confirm or prioritize the gaps (e.g. "Which of these gaps should we address first?"). Wait for answer, then <STEP_DONE:gaps>.
+STEP 1 requirements:
+  - Exact scope (what's in, what's out)
+  - Acceptance criteria (how do we know it's done)
+  - UX/API surface (flows, endpoints, screens)
+  - Performance/security/accessibility constraints
+  - Priority order if multi-feature
+  - Migration/backward-compat requirements
 
-STEP 4 — approach:
-  Present the technical approach in <ANALYSIS> (architecture, libraries, milestones, risks, mitigations). Ask decisions one at a time: library picks, architecture branches, scope tradeoffs. Multiple rounds of questions allowed.
+STEP 2 codebase:
+  - Which existing modules/files to modify
+  - Which patterns/conventions to follow
+  - Reusable utilities already present
+  - Build/test tooling in use
 
-STEP 5 — testing:
-  Propose a testing strategy in <ANALYSIS>. Ask the user to confirm coverage level or tradeoffs. Wait for answer, then <STEP_DONE:testing>.
+STEP 3 gaps:
+  - For every unknown: ask to resolve OR explicitly defer
+  - External dependencies (APIs, services, credentials)
+  - Schema/data model changes
+  - Environment/config changes
 
-STEP 6 — plan:
-  Emit one <ANALYSIS title="Plan Summary"> and the full plan wrapped in <PLAN_START>...<PLAN_END>. Include file-by-file changes, milestone sequence, and the agreed testing strategy. No <QUESTION> on this step — this is the final output.
+STEP 4 approach:
+  - Architecture (layers, modules, boundaries)
+  - Library/framework choices for each concern
+  - Data models with field types
+  - Error handling strategy
+  - Auth/permissions approach
+  - Logging/observability
+  - Rollout plan (feature flag, migration, etc.)
+  - File-by-file breakdown of changes
 
-## Task / Requirements
-${task}
+STEP 5 testing:
+  END-TO-END INTEGRATION TESTING IS MANDATORY. Pick the right strategy for the app type and present it as the default. Do NOT ask "should we test?" — test coverage is non-negotiable. Ask only HOW to test.
 
-## Repository Map (live snapshot captured when this session started/resumed)
-${projectMap || '(No readable project files found — this may be a new project)'}`;
+  Platform-appropriate E2E strategies (pick one as default, justify):
+  - Flutter / native mobile app → Firebase Test Lab (real devices). Plan the complete flow: build → upload APK/AAB → run on Test Lab → collect artifacts. Ask about test matrix (device models, Android versions) and SA key availability.
+  - Web app / SPA → Playwright or Cypress against a deployed preview or local server. Plan headless CI runs.
+  - Backend API / microservice → HTTP integration tests against a real running instance (docker-compose). Contract tests if public API.
+  - CLI tool → Bats or shell-based E2E with expected stdout/stderr snapshots.
+  - Library / SDK → Example app that exercises the public API, run in CI.
+
+  Also cover:
+  - Unit test coverage target (%, critical paths only, or exhaustive)
+  - Integration test boundaries (which layers)
+  - Test fixtures/seed data strategy
+  - Mocking strategy (what's mocked vs real)
+  - CI pipeline step order (lint → unit → integration → E2E)
+  - Flaky test policy
+
+STEP 5.5 execution infra (part of Step 5 or woven into Step 4):
+  Archon runs the executor agent in a Docker container. Before execution can succeed, the container must have all required tooling. You MUST discuss and resolve infra decisions:
+  - Runtime versions (Node, Python, Flutter, Go, etc.) — state exact versions
+  - Required system packages (apt-get install ...)
+  - Required language package managers and global packages (npm -g, pip, etc.)
+  - SDKs / emulators / simulators (Android SDK, iOS Simulator unavailable on Linux containers)
+  - External service credentials needed in container (GCP SA key, API tokens, SSH keys for private deps)
+  - Network egress (which domains must be reachable)
+  - Build artifacts location and persistence (workspace mount vs docker volume)
+  - Firebase/Google Cloud: how the SA key is mounted (${'$'}{'{'}GOOGLE_APPLICATION_CREDENTIALS{'}'} env var points to /keys/sa-key.json in container)
+
+  If the current Dockerfile doesn't have something required, flag it. Ask the user: "The executor container doesn't have X. Options: (a) extend the image, (b) install at runtime via entrypoint, (c) skip this feature." Always present a recommended default.
+
+STEP 6 plan:
+  - Emit <ANALYSIS title="Plan Summary"> with the decisions
+  - Emit <PLAN_START>...detailed file-by-file markdown plan with milestones, commands, testing steps...<PLAN_END>
+  - The plan must be complete enough that an executor agent with only terminal + file edit tools can complete it end-to-end.
+
+EXECUTION ENVIRONMENT (Archon Docker container — what the executor has):
+- OS: Debian-based Linux
+- Runtimes: Node.js, Python, Go, Flutter (version configurable via FLUTTER_VERSION env)
+- Package managers: apt, npm, pip, pub (Flutter)
+- Tools: git, curl, wget, jq, bash, tmux
+- Mounts: project at /workspace (rw), host ~/.copilot read-only, SA key at /keys/sa-key.json (if provided)
+- Firebase Test Lab: gcloud CLI + GOOGLE_APPLICATION_CREDENTIALS work if SA key and FIREBASE_PROJECT_ID are set
+- NOT in image by default: iOS toolchain (macOS-only), Android emulator (too heavy; use Test Lab), specialized SDKs
+
+When planning, verify the approach works in this container. If something is missing, ask the user how to handle it.
+
+TASK: ${task}
+
+REPO MAP:
+${projectMap || '(empty project)'}`;
 }
 
 // ── Agent API implementations ────────────────────────────────────────────────
@@ -490,8 +531,16 @@ async function streamCopilot(messages, config, onChunk, onDone, onError) {
     const text = await res.text().catch(() => '');
     // Auto-retry on 429 rate limit (wait the suggested time)
     if (res.status === 429) {
-      const retryMatch = text.match(/wait (\d+) seconds/i);
-      const waitSec = retryMatch ? parseInt(retryMatch[1], 10) + 1 : 10;
+      // Parse "Please wait X seconds" from the error — use Retry-After header as primary
+      const retryAfterHeader = res.headers.get('retry-after');
+      let waitSec = 10;
+      if (retryAfterHeader) {
+        waitSec = Math.min(parseInt(retryAfterHeader, 10) || 10, 30);
+      } else {
+        // Fallback: look for "wait N seconds" at the END of the message (not "40000 per 60s")
+        const retryMatch = text.match(/wait\s+(\d{1,3})\s+seconds/i);
+        waitSec = retryMatch ? Math.min(parseInt(retryMatch[1], 10) + 1, 30) : 10;
+      }
       console.log(`[plan] 429 rate limited — retrying in ${waitSec}s`);
       onChunk(`(Rate limited — retrying in ${waitSec}s…)\n`);
       await new Promise(r => setTimeout(r, waitSec * 1000));
@@ -508,12 +557,12 @@ async function streamCopilot(messages, config, onChunk, onDone, onError) {
   }
   console.log('[quota] GitHub Models headers:', JSON.stringify(rlHeaders));
 
-  // Extract quota from response headers (GitHub Models returns these)
+  // Extract token quota from response headers (the actual bottleneck, not request count)
   const quota = {
     provider:  'GitHub Models',
-    remaining: res.headers.get('x-ratelimit-remaining-requests') || res.headers.get('x-ms-quota-remaining-requests'),
-    limit:     res.headers.get('x-ratelimit-limit-requests')     || res.headers.get('x-ms-quota-limit-requests'),
-    reset:     res.headers.get('x-ratelimit-reset'),
+    remaining: res.headers.get('x-ratelimit-remaining-tokens'),
+    limit:     res.headers.get('x-ratelimit-limit-tokens'),
+    reset:     res.headers.get('x-ratelimit-reset-tokens'),
   };
 
   await consumeSSE(res, onChunk, (q) => onDone(q), onError, quota);
@@ -958,30 +1007,60 @@ async function sendPlanMessage(sessionId, userText, onChunk, onDone, onError, on
   const charBudget = TOKEN_BUDGETS * 4;
   // Skip turn context on requirements step (agent doesn't need files yet) and keep it lean
   const contextBudget = sess.currentStep === 'requirements'
-    ? 0   // No file excerpts needed for requirements — just the repo map in system prompt
+    ? 0   // No file excerpts needed for requirements
     : (agent === 'copilot' || agent === 'aider')
-      ? Math.min(8000, Math.max(3000, Math.floor(charBudget * 0.20)))
+      ? Math.min(4000, Math.floor(charBudget * 0.15))  // Keep lean for rate-limited APIs
       : Math.min(18000, Math.max(6000, Math.floor(charBudget * 0.32)));
   const turnContext = contextBudget > 0 ? buildTurnContextPack(sess, userText, contextBudget) : '';
 
+  /**
+   * Build a compact message list: system prompt + conversation summary + last 2 exchanges.
+   * Instead of sending all N messages (which balloons tokens), we summarize earlier
+   * decisions and analysis into a single context block.
+   */
   function trimmedMessages(contextText = '') {
     const system = sess.messages.filter(m => m.role === 'system');
     const chat   = sess.messages.filter(m => m.role !== 'system');
-    const systemChars = system.reduce((n, m) => n + m.content.length, 0);
-    const reservedForContext = contextText ? contextText.length + 800 : 0;
-    let budget = charBudget - systemChars - reservedForContext;
-    const kept = [];
-    for (let i = chat.length - 1; i >= 0; i--) {
-      const len = chat[i].content.length;
-      if (budget - len < 500 && kept.length > 0) break;  // keep at least 500 chars headroom
-      kept.unshift(chat[i]);
-      budget -= len;
+
+    // Always keep the last 6 messages (3 Q/A exchanges) so the agent sees real context
+    const KEEP_RECENT = 6;
+
+    // If conversation is short enough, send everything
+    if (chat.length <= KEEP_RECENT) return [...system, ...chat];
+
+    // Summarize earlier messages (not the recent ones)
+    const older = chat.slice(0, chat.length - KEEP_RECENT);
+    const recent = chat.slice(-KEEP_RECENT);
+
+    const summaryParts = [];
+    summaryParts.push(`Step: ${sess.currentStep}, Completed: ${sess.completedSteps.join(', ') || 'none'}`);
+
+    // Extract Q/A pairs from older messages only
+    const decisions = [];
+    for (let i = 0; i < older.length; i++) {
+      const m = older[i];
+      if (m.role === 'assistant') {
+        const qMatch = m.content.match(/<QUESTION>[\s\S]*?"title"\s*:\s*"([^"]+)"/);
+        if (qMatch) {
+          const nextUser = older[i + 1];
+          if (nextUser?.role === 'user') {
+            decisions.push(`- "${qMatch[1]}" → ${nextUser.content.slice(0, 120)}`);
+          }
+        }
+      }
     }
-    if (kept.length < chat.length) {
-      kept.unshift({ role: 'user', _internal: true,
-        content: '[Note: earlier conversation was trimmed to fit the context window. Continue from the current state of the planning session.]' });
+    if (decisions.length) {
+      summaryParts.push('Previous Q/A (earlier in session):');
+      summaryParts.push(...decisions);
     }
-    return [...system, ...kept];
+
+    const summary = {
+      role: 'user',
+      _internal: true,
+      content: `[SESSION CONTEXT]\n${summaryParts.join('\n')}\n[End of summary. The recent messages below are the live conversation — respond to the user's latest answer specifically.]`
+    };
+
+    return [...system, summary, ...recent];
   }
 
   function withTurnContext(messages, contextText) {
@@ -1007,10 +1086,13 @@ async function sendPlanMessage(sessionId, userText, onChunk, onDone, onError, on
 
   const messagesToSend = withTurnContext(trimmedMessages(turnContext), turnContext);
 
-  // Log token estimate for debugging
+  // Log token estimate — also emit as a chat_chunk so client can see it
   const totalChars = messagesToSend.reduce((n, m) => n + (m.content || '').length, 0);
   const estTokens = Math.ceil(totalChars / 4);
-  console.log(`[plan] sending ${messagesToSend.length} messages, ~${estTokens} tokens (${totalChars} chars), step=${sess.currentStep}, agent=${agent}`);
+  const tokenLog = `[tokens] Sending ~${estTokens} tokens (${messagesToSend.length} messages, step=${sess.currentStep})`;
+  console.log(tokenLog);
+  // Notify via onChunk so it reaches the client dev_log
+  try { onChunk(`__DEV_LOG__${tokenLog}`); } catch (_) {}
 
   if (agent === 'copilot') {
     await streamCopilot(messagesToSend, sess.config, accChunk, accDone, onError);
